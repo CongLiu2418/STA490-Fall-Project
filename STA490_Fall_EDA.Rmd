@@ -1,0 +1,524 @@
+---
+title: "STA490 Fall Project EDA"
+author: "Cong Liu"
+date: "2022-09-29"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "/Users/crystal-liu/Downloads/sta490")
+```
+
+```{r clear env and import libs}
+#getwd() # checking current wd
+rm(list = ls())
+library(tidyverse)
+library(dplyr)
+library(tidyselect)
+library(ggpubr)
+```
+
+## Data cleaning
+
+-   Loading the data in R
+
+```{r load typingdata}
+typingdata.raw <- read.csv("typingdata.csv")
+```
+
+-   Checking whether the data contains missing values
+
+```{r check NA in data}
+no_na <- na.omit(typingdata.raw)
+dim(typingdata.raw) == dim(no_na)
+```
+
+-   Checking potential duplicate (rows) in data
+
+```{r check duplicates in data}
+# matrix of FALSE, if there is no duplicates in data
+no_dup <- matrix(FALSE, 
+                 nrow = nrow(typingdata.raw), 
+                 ncol = ncol(typingdata.raw))
+#duplicated(typingdata.raw) == no_dup # matrix of TRUE, indicating no duplicates in data
+```
+
+-   Overview of the data
+
+```{r glimpse data}
+str(typingdata.raw)
+```
+
+### From the `str` output, below stood out
+
+1.  Column names are too long (as they are from the survey question export)
+
+The goal is to have descriptive and concise column names,
+
+-   adding "key_" prefix to data collected from typing on a keyboard
+
+-   adding "mobile_" prefix to data collected from typing on a mobile device
+
+-   adding number suffix to indicate the test/trial number
+
+-   adding units to numerical columns
+
+-   summarize the survey question so that the columns represent the potential factors affecting the typing speed
+
+The renaming is implemented by the `setnames()` function from package `data.table`.
+
+```{r rename columns}
+library(data.table)
+# adding “key_” prefix to data for keyboard typing 
+# and number suffix for number of tests/trials
+old_names <- names(typingdata.raw)
+new_names <- c("key_wpm_01",
+               "key_acc_01",
+               "key_wpm_02",
+               "key_acc_02",
+               "key_wpm_03",
+               "key_acc_03",
+               "mobile_wpm_01",
+               "mobile_acc_01",
+               "mobile_wpm_02",
+               "mobile_acc_02",
+               "mobile_wpm_03",
+               "mobile_acc_03",
+               "mobile_fingers",
+               "mobile_type",
+               "screen_diag_size",
+               "key_type",
+               "age",
+               "key_freq",
+               "gamer",
+               "musician",
+               "physical_limitation",
+               "english_fluency")
+
+to_clean <- setnames(typingdata.raw, old = old_names, new = new_names)
+# at the caveat at also renaming columns in the raw data
+# yet the "rawest" from can always retrieved by reading in the .csv file
+```
+
+2.  Units exist in some observations.
+
+The goal is to removing the units from **all** observations. My expectation is that units would only appear in column names, so that the headers can act as the "data dictionary".
+
+Preserve the columns' data type as `<chr>`, use functions from the `tidyselect` package to implement the removal of units.
+
+-   for typing speed and accruacy columns, remove "WPM" and "%", respectively
+
+-   for column of screen size
+
+    -   remove "cm" and "centimeters"
+
+    -   compute the diagonal length of screen based on recorded dimensions
+    
+    -   convert the known inches entry to centimeters
+    
+```{r remove units - typing speed and accuracy}
+# remove "WPM" from speed records
+to_clean <- to_clean %>% 
+  mutate_at(vars(contains("wpm")), ~str_remove(., "WPM"))
+
+# remove "%" from accuracy entries
+to_clean <- to_clean %>% 
+  mutate_at(vars(contains("acc")), ~str_remove(., "%"))
+```
+
+```{r remove units - screen size}
+# fixing observations in the mobile_screen_diag_size column
+
+  # for entries containing "cm" and "centimeter"
+to_clean <- to_clean %>% 
+  mutate_at(vars(contains("screen")), ~str_remove(., "cm"))
+
+to_clean <- to_clean %>% 
+  mutate_at(vars(contains("screen")), ~str_remove(., "centimeters"))
+```
+
+```{r pull out errors in screen size}
+  # for entries of dimensions
+  # compute the diagonal length by Pythagorean theorem
+
+# extract the screen size column as tibble
+screen_sizes <- tibble::tibble(index = 1:39,
+                               sizes = to_clean$screen_diag_size) 
+
+size_error <- screen_sizes %>%  # find the rows that cannot be converted to numeric
+     mutate(row_num = row_number()) %>%
+     filter(is.na(as.numeric(sizes)))
+size_error
+```
+
+-   use the Pythagorean theorem to compute the "deduced" diagonal lengths for these two observations.
+
+```{r calculate screen size}
+diag_13 = sqrt(14.67^2 + 7.15^2)
+diag_13
+
+diag_35 = sqrt((78.1/10)^2 + (160.8/10)^2) # convert mm to cm
+diag_35
+```
+
+```{r impute screen size}
+# for dimension entries
+to_clean$screen_diag_size[13] <- diag_13
+to_clean$screen_diag_size[35] <- diag_35
+
+# for inches entry
+which.min(to_clean$screen_diag_size) # the minimum (entered in inches) is at index 14
+mobile_diagonal_inch <- as.numeric(to_clean$screen_diag_size[14])
+to_clean$screen_diag_size[14] <- mobile_diagonal_inch * 2.54
+```
+
+
+3. Data types are not appropriate for some column.
+
+-   columns of typing speed, typing accuracy, screen size and age should be numeric
+
+```{r change data type}
+cols_to_change <- c("key_wpm_01",
+               "key_acc_01",
+               "key_wpm_02",
+               "key_acc_02",
+               "key_wpm_03",
+               "key_acc_03",
+               "mobile_wpm_01",
+               "mobile_acc_01",
+               "mobile_wpm_02",
+               "mobile_acc_02",
+               "mobile_wpm_03",
+               "mobile_acc_03",
+               "screen_diag_size",
+               "age")
+index_to_change <- match(cols_to_change,
+                         names(to_clean))
+#index_to_change
+to_clean[ , index_to_change] <- apply(to_clean[ , index_to_change], 
+                                      2, 
+                                      function(x) as.numeric(x))
+str(to_clean) # the mentioned columns are converted to numeric
+dim(to_clean) == dim(na.omit(to_clean)) # no nas introduced by conversion
+```
+
+-   **(tentative)** round screen size to two(?) decimal places
+
+```{r round up screen size decimal points}
+#to_clean$mobile_diagonal_cm <- format(round(to_clean$mobile_diagonal_cm, 2), nsmall = 2)
+#View(to_clean)
+```
+
+
+4. Lengthy values in some columns.
+
+- **unique(column)**: key_freq values into "everyday", "weekly", "monthly"
+```{r key_freq mapping}
+old_key_freqs = c("Every day or almost every day", 
+                  "A few times per week",
+                  "A few times per month or less")
+to_clean$key_freq <- plyr::mapvalues(to_clean$key_freq, 
+                                     from = old_key_freqs,
+                                     to = c("Every day", "Weekly", "Monthly"))
+to_clean$key_freq 
+```
+
+- for columns of keyboard type, map the values to "mechanical - raise" or "laptop - low-profile"
+```{r key_type mapping}
+old_key_types = c("A laptop keyboard, with low-profile keys (so the keys don't go down much when you type)", "A mechanical keyboard, with raised keys (i.e. a keyboard that is not built in to a laptop, but that is either connected via a cable or bluetooth)")
+to_clean$key_type <- plyr::mapvalues(to_clean$key_type, 
+                                     from = old_key_types,
+                                     to = c("Low-profile", "Raised"))
+to_clean$key_type 
+```
+
+- **unique(column)**: english_fluency into "full", "professional" and "conversational"
+```{r english_fluency mapping}
+old_fluency = c("Fully fluent in English", "Professional fluency in English", "Conversational fluency in English")
+to_clean$english_fluency <- plyr::mapvalues(to_clean$english_fluency, 
+                                     from = old_fluency,
+                                     to = c("Full", "Professional", "Conversational"))
+to_clean$english_fluency
+```
+
+5. Turn data into tidy format 
+
+- taking average of the three trials
+```{r averaging across 3 trials}
+to_clean <- to_clean %>% mutate(key_avg_wpm = (key_wpm_01 + key_wpm_02 + key_wpm_03) / 3,
+                                key_avg_acc = (key_acc_01 + key_acc_02 + key_acc_03) / 3,
+                                mobile_avg_wpm = (mobile_wpm_01 + mobile_wpm_02 + mobile_wpm_03) / 3,
+                                mobile_avg_acc = (mobile_acc_01 + mobile_acc_02 + mobile_acc_03) / 3)
+```
+
+
+- select relevant columns
+```{r select relevant columns}
+typing_data <- to_clean %>% select(key_avg_wpm, 
+                                   key_avg_acc, 
+                                   mobile_avg_wpm, 
+                                   mobile_avg_acc,
+                                   mobile_fingers,
+                                   mobile_type,
+                                   screen_diag_size,
+                                   key_type,
+                                   age,
+                                   key_freq,
+                                   gamer,
+                                   musician,
+                                   physical_limitation,
+                                   english_fluency)
+str(typing_data)
+```
+
+
+## Examination of relevant variables
+
+```{r load cleaned data}
+typing_data <- to_clean
+```
+
+The research question is: **Do people who type fast on a keyboard also type faster on their mobile phones?**
+
+Without any quantitative measures (e.g. correlations), mainly focusing on these variables based on research question:
+
+-   typing speed (in Words Per Minute) for all three trials on keyboard and on mobile device
+-   typing accuracy (in %) for all three trials on keyboard and on mobile device
+
+And based on some prior knowledge in factors affecting typing speed that gamers and keyboard musicians have the chance to practice and to be trained for a higher hand flexibility, which leads to better performance in gaming and playing music. For keyboard and mobile device typing test observations, compare
+
+-   whether the person is a gamer
+-   whether the person is a musician playing keyboard instruments
+
+1.  Examine the distribution of keyboard typing speeds across the three trials
+
+```{r summarize keyboard typing speed}
+summary(typing_data$key_wpm_01)
+summary(typing_data$key_wpm_02)
+summary(typing_data$key_wpm_03)
+```
+
+```{r boxplot for keyboard typing speed}
+key_WPM_trial1 <- ggplot(data=typing_data) + 
+  geom_boxplot(aes(key_wpm_01)) + 
+  labs(x = "Typing Speed (WPM)") + 
+  ggtitle("Keyboard Typing Speed (Trial 1)") 
+
+key_WPM_trial2 <- ggplot(data=typing_data) + 
+  geom_boxplot(aes(key_wpm_02)) + 
+  labs(x = "Typing Speed (WPM)") + 
+  ggtitle("Keyboard Typing Speed (Trial 2)") 
+
+key_WPM_trial3 <- ggplot(data=typing_data) + 
+  geom_boxplot(aes(key_wpm_03)) + 
+  labs(x = "Typing Speed (WPM)") + 
+  ggtitle("Keyboard Typing Speed (Trial 3)") 
+
+key_WPM_boxplots <- ggarrange(key_WPM_trial1,
+                    key_WPM_trial2,
+                    key_WPM_trial3,
+                    ncol = 1, 
+                    nrow = 3)
+key_WPM_boxplots
+```
+
+We can see that the median typing speed on the keyboard has slightly increased over trials. One may argue that the the earlier trials are "practice rounds" for people to be familiar with the typing test. Yet the highest median typing speed on the keyboard occurs in the second trial, instead of the third and last trial.
+
+As we are interested in *"people who type fast on a keyboard"*, a natural need is to define "fast typing". Here considers common thresholds (the sample median and the sample mean). The distribution of the keyboard typing speeds is slightly skewed to the right, thus at this stage sample median seems more favourable as the benchmark for fast typing, yet this is subject to change as further investigating the data.
+
+Still looking at the typing performance on keyboard,
+
+2.  Examine the distribution of keyboard typing accuracy across the three trials
+
+```{r summarize keyboard typing accuracy}
+summary(typing_data$key_acc_01)
+summary(typing_data$key_acc_02)
+summary(typing_data$key_acc_03)
+```
+
+Noticed a **100% accuracy in the second trial** of typing test on a keyboard: is it a correct value or an error due to self-reporting bias/manual entry?
+
+```{r boxplot for keyboard typing accuracy}
+key_acc_trial1 <- ggplot(data=typing_data) + 
+  geom_boxplot(aes(key_acc_01)) + 
+  labs(x = "Typing Accuracy (%)") + 
+  ggtitle("Keyboard Typing Accuracy (Trial 1)") 
+
+key_acc_trial2 <- ggplot(data=typing_data) + 
+  geom_boxplot(aes(key_acc_02)) + 
+  labs(x = "Typing Accuracy (%)") + 
+  ggtitle("Keyboard Typing Accuracy (Trial 2)")
+
+key_acc_trial3 <- ggplot(data=typing_data) + 
+  geom_boxplot(aes(key_acc_03)) + 
+  labs(x = "Typing Accuracy (%)") + 
+  ggtitle("Keyboard Typing Accuracy (Trial 3)")
+
+key_acc_boxplots <- ggarrange(key_acc_trial1,
+                    key_acc_trial2,
+                    key_acc_trial3,
+                    ncol = 1, 
+                    nrow = 3)
+key_acc_boxplots
+```
+
+The median typing accuracy on keyboard from all three trials is just over 90%. The highest median typing speed on the keyboard occurs in the third and last trial, reminding me of the concern that the the earlier trials are "practice rounds" for people to be familiar with the typing test.
+
+3.  Do gamers type faster on the keyboard?
+
+```{r keyboard typing speed vs gamer}
+key_gamerwpm_trial1 <- typing_data %>% ggplot(aes(x=key_wpm_01,fill=gamer)) + 
+  geom_boxplot(aes(key_wpm_01)) + 
+  labs(x = "Typing Speed (WPM)") + coord_flip() +
+  ggtitle("Trial 1") 
+  
+key_gamerwpm_trial2 <- typing_data %>% ggplot(aes(x=key_wpm_02,fill=gamer)) + 
+  geom_boxplot(aes(key_wpm_02)) + 
+  labs(x = "Typing Speed (WPM)") + coord_flip() +
+  ggtitle("Trial 2") 
+  
+key_gamerwpm_trial3 <- typing_data %>% ggplot(aes(x=key_wpm_03,fill=gamer)) + 
+  geom_boxplot(aes(key_wpm_03)) + 
+  labs(x = "Typing Speed (WPM)") + coord_flip() +
+  ggtitle("Trial 3") 
+  
+key_gamerwpm_boxplots <- ggarrange(key_gamerwpm_trial1,
+                                   key_gamerwpm_trial2,
+                                   key_gamerwpm_trial3,
+                                   ncol = 3,
+                                   nrow = 1)
+key_gamerwpm_boxplots
+```
+
+The gamers type faster than the non-gamers on a keyboard (median wise). Based on the keyboard typing tests, *someone being a gamer or not does affect the typing speed*.
+
+4.  Do musicians type faster on the keyboard?
+
+```{r keyboard typing speed vs musician}
+key_musicwpm_trial1 <- typing_data %>% ggplot(aes(x=key_wpm_01,fill=musician)) + 
+  geom_boxplot(aes(key_wpm_01)) + 
+  labs(x = "Typing Speed (WPM)") + coord_flip() +
+  ggtitle("Trial 1") 
+  
+key_musicwpm_trial2 <- typing_data %>% ggplot(aes(x=key_wpm_02,fill=musician)) + 
+  geom_boxplot(aes(key_wpm_02)) + 
+  labs(x = "Typing Speed (WPM)") + coord_flip() +
+  ggtitle("Trial 2") 
+  
+key_musicwpm_trial3 <- typing_data %>% ggplot(aes(x=key_wpm_03,fill=musician)) + 
+  geom_boxplot(aes(key_wpm_03)) + 
+  labs(x = "Typing Speed (WPM)") + coord_flip() +
+  ggtitle("Trial 3") 
+  
+key_musicwpm_boxplots <- ggarrange(key_musicwpm_trial1,
+                                   key_musicwpm_trial2,
+                                   key_musicwpm_trial3,
+                                   ncol = 3,
+                                   nrow = 1)
+key_musicwpm_boxplots
+```
+
+The non-keyboard musicians type faster than the musicians on a keyboard (median wise).
+
+Switching gears to the typing performance on a mobile device, in which we focuses solely on typing speed.
+
+1. Examine the distribution of mobile device typing speeds across the three trials
+
+```{r summarize mobile typing speed}
+summary(typing_data$mobile_wpm_01)
+summary(typing_data$mobile_wpm_02)
+summary(typing_data$mobile_wpm_03)
+```
+
+```{r boxplot for mobile typing speed}
+mobile_WPM_trial1 <- ggplot(data=typing_data) + 
+  geom_boxplot(aes(mobile_wpm_01)) + 
+  labs(x = "Typing Speed (WPM)") + 
+  ggtitle("Mobile Device Typing Speed (Trial 1)") 
+
+mobile_WPM_trial2 <- ggplot(data=typing_data) + 
+  geom_boxplot(aes(mobile_wpm_02)) + 
+  labs(x = "Typing Speed (WPM)") + 
+  ggtitle("Mobile Device Typing Speed (Trial 2)") 
+
+mobile_WPM_trial3 <- ggplot(data=typing_data) + 
+  geom_boxplot(aes(mobile_wpm_03)) + 
+  labs(x = "Typing Speed (WPM)") + 
+  ggtitle("Mobile Device Typing Speed (Trial 3)") 
+
+mobile_WPM_boxplots <- ggarrange(mobile_WPM_trial1,
+                    mobile_WPM_trial2,
+                    mobile_WPM_trial3,
+                    ncol = 1, 
+                    nrow = 3)
+mobile_WPM_boxplots
+```
+
+We can see a set of similar plots with that from the typing trials on the keyboard. The second and third trial of typing on a mobile device have the same median typing speed.
+
+Since the gamers type faster on a keyboard, interested in checking whether this difference also applies when typing on a mobile device.
+
+2.  Do gamers type faster on the mobile device?
+
+```{r mobile typing speed vs gamer}
+mobile_gamerwpm_trial1 <- typing_data %>% ggplot(aes(x=mobile_wpm_01,fill=gamer)) + 
+  geom_boxplot(aes(mobile_wpm_01)) + 
+  labs(x = "Typing Speed (WPM)") + coord_flip() +
+  ggtitle("Trial 1") 
+  
+mobile_gamerwpm_trial2 <- typing_data %>% ggplot(aes(x=mobile_wpm_02,fill=gamer)) + 
+  geom_boxplot(aes(mobile_wpm_02)) + 
+  labs(x = "Typing Speed (WPM)") + coord_flip() +
+  ggtitle("Trial 2") 
+  
+mobile_gamerwpm_trial3 <- typing_data %>% ggplot(aes(x=mobile_wpm_03,fill=gamer)) + 
+  geom_boxplot(aes(mobile_wpm_03)) + 
+  labs(x = "Typing Speed (WPM)") + coord_flip() +
+  ggtitle("Trial 3") 
+  
+mobile_gamerwpm_boxplots <- ggarrange(mobile_gamerwpm_trial1,
+                                   mobile_gamerwpm_trial2,
+                                   mobile_gamerwpm_trial3,
+                                   ncol = 3,
+                                   nrow = 1)
+mobile_gamerwpm_boxplots
+```
+
+The gamers type faster than the non-gamers **on a mobile device as well as on a keyboard** (median wise).
+
+## Preliminary Insights
+
+Inspired by this [news article](https://www.cnet.com/tech/mobile/people-can-now-type-on-phones-nearly-as-fast-as-on-computer-keyboards/), the project aims to investigate the research question: **Do people who type fast on a keyboard also type faster on their mobile phones?**.
+
+As a class, each student did a typing test on an [online platform](https://10fastfingers.com/typing-test/english), using both a keyboard and a mobile device. In both settings, we tested our typing for three times and recorded the results. The typing speed is measured in the unit of **Words Per Minute (WPM)**. From the explanatory analysis on the collected sample (at the current stage), we may answer this question with a "yes". 
+
+The graph below is a collection of scatterplots, with keyboard typing speed on the x-axis and mobile device typing speed on the y-axis. Such scatterplot is drawn for each typing test trials. For all three trials, we can observe a positive trend between the typing speed on a keyboard and the typing speed on a mobile device. In other words, people who type fast on a keyboard, **also tend to type faster on a mobile device**.
+```{r wpm scatterplots across trials, echo=FALSE}
+wpm_scatter_trial1 <- ggplot(data = typing_data) + 
+  geom_point(aes(key_wpm_01, mobile_wpm_01)) + 
+  labs(x = "Keyboard Typing Speed (WPM)", 
+       y = "Mobile Device Typing Speed (WPM)") +
+  ggtitle("Trial 1") 
+
+#+ coord_flip() +
+wpm_scatter_trial2 <- ggplot(data = typing_data) + 
+  geom_point(aes(key_wpm_02, mobile_wpm_02)) + 
+  labs(x = "Keyboard Typing Speed (WPM)", 
+       y = "Mobile Device Typing Speed (WPM)") +
+  ggtitle("Trial 2") 
+ 
+wpm_scatter_trial3 <- ggplot(data = typing_data) + 
+  geom_point(aes(key_wpm_03, mobile_wpm_03)) + 
+  labs(x = "Keyboard Typing Speed (WPM)", 
+       y = "Mobile Device Typing Speed (WPM)") +
+  ggtitle("Trial 3") 
+
+
+wpm_scatters <- ggarrange(wpm_scatter_trial1,
+                          wpm_scatter_trial2,
+                          wpm_scatter_trial3,
+                          ncol = 3,
+                          nrow = 1)
+wpm_scatters + theme_minimal()
+```

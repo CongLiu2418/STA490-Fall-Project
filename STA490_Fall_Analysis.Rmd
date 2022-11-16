@@ -1,0 +1,1089 @@
+---
+title: "STA490 Fall Project: Statistical Analysis"
+author: "Cong Liu - 1006267200"
+date: "2022-10-28"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "/Users/crystal-liu/Downloads/sta490")
+```
+
+```{r clear env and import libs, message=FALSE, warning=FALSE, include=FALSE}
+#getwd() # checking current wd
+rm(list = ls())
+library(tidyverse)
+library(dplyr)
+library(data.table)
+library(tidyselect)
+library(plyr)
+library(ggpubr)
+```
+
+# Introduction 
+
+A news article [(article link)](https://www.cnet.com/tech/mobile/people-can-now-type-on-phones-nearly-as-fast-as-on-computer-keyboards/) reported that people can now type almost as fast on their smartphones as they can on their computer keyboards. The article motivates an interest in investigating the question: **Do people who type fast on a keyboard also type faster on their mobile phones?**
+
+As a class, each student enrolled in STA490 did a typing test on an online platform [(platform link)](https://10fastfingers.com/typing-test/english), using both a keyboard and a mobile device. We tested our typing three times in both settings and recorded the results. Repeated measurement is an attempt to eliminate irrelevant idiosyncrasies including but not limited to measurement errors and to increase the precision of the typing speed measurements. The test has a time limit of 60 seconds and requires the student to type out randomly generated words fast and correctly. The voluntary records of the test results entail (i) the typing speed, measured in the unit of **Words Per Minute "WPM"** and (ii) accuracy (in percentage). In this online test, each word in the measurement of **WPM is standardized as five keystrokes** long in English [(platform faq)](https://10fastfingers.com/faq) [(WPM definition)](https://en.wikipedia.org/wiki/Words_per_minute).
+
+The analysis leverages data on typing speed and relevant student characteristics collected from the STA490 class and employs **mutiple linear regression models** to understand the association between the computer keyboard typing speed and the typing speed on mobile devices. Findings from this analysis could potentially be generalized to university students in Toronto.
+
+# Data cleaning
+
+The first step taken before cleaning the raw data is checking for potential missing values and duplicates. After confirming that there are neither missing values nor duplicates in the raw data, examination of the data structure motivates the data cleaning steps below. 
+
+## Rename Columns
+
+Column names in the raw data are too long as they are the "raw export" from the survey questions.
+
+The goal is to have descriptive and concise column names that summarize the survey question and pinpoint the potential factors affecting the typing speed.
+
+```{r Table 1.1 data dictionary, echo=FALSE}
+data_dict <- tibble(variable_name = c("key_wpm_01",
+                                      "key_acc_01",
+                                      "key_wpm_02",
+                                      "key_acc_02",
+                                      "key_wpm_03",
+                                      "key_acc_03",
+                                      "mobile_wpm_01",
+                                      "mobile_acc_01",
+                                      "mobile_wpm_02",
+                                      "mobile_acc_02",
+                                      "mobile_wpm_03",
+                                      "mobile_acc_03",
+                                      "mobile_fingers",
+                                      "mobile_type",
+                                      "screen_diag_size",
+                                      "key_type",
+                                      "age",
+                                      "key_freq",
+                                      "gamer",
+                                      "musician",
+                                      "physical_limitation",
+                                      "english_fluency"),
+                    definition = c("Keyboard typing speed in Trial 1 (WPM)",
+                                   "Keyboard typing accuracy in Trial 1 (%)",
+                                   "Keyboard typing speed in Trial 2 (WPM)",
+                                   "Keyboard typing accuracy in Trial 2 (%)",
+                                   "Keyboard typing speed in Trial 3 (WPM)",
+                                   "Keyboard typing accuracy in Trial 3 (%)",
+                                   "Mobile device typing speed in Trial 1 (WPM)",
+                                   "Mobile device typing accuracy in Trial 1 (%)",
+                                   "Mobile device typing speed in Trial 2 (WPM)",
+                                   "Mobile device typing accuracy in Trial 2 (%)",
+                                   "Mobile device typing speed in Trial 3 (WPM)",
+                                   "Mobile device typing accuracy in Trial 3 (%)",
+                                   "Mobile device typing posture used in tests",
+                                   "Mobile device type used in tests",
+                                   "Screen size of mobile device used in tests (cm)",
+                                   "Keyboard type used in tests ",
+                                   "Age at the time of tests (years)",
+                                   "Keyboard usage frequency at the time of tests",
+                                   "Gamer at the time of tests",
+                                   "Plays a keyboard instrument at the time of tests",
+                                   "Physical limitation related to typing at the time of tests",
+                                   "English fluency level at the time of tests")) 
+
+knitr::kable(data_dict,
+             col.names = c("Variable name", 
+                           "Definition"),
+             caption = "Raw Data Dictionary")
+```
+
+## Remove Units
+
+Units exist in some observations. The goal is to remove the units from **all** observations.
+
+-   for typing speed and accuracy columns, remove "WPM" and "%", respectively
+-   for column of screen size, remove "cm" and "centimeters"
+-   compute the diagonal length of screen based on recorded dimensions using the Pythagorean theorem
+-   handle the known outlier (6.1 inches), convert the entered value from inches to centimeters
+
+## Change Data Types
+
+Data types are not appropriate for some columns. The columns recording typing speed, typing accuracy, screen size and age are converted to numeric type.
+
+## Mapping values
+
+The categorical columns contain lengthy values. The (re-)mapping is as below
+
+```{r Table 1.2 data mapping, echo=FALSE}
+data_map <- tibble( variable_name = c("key_type",
+                                      "key_freq",
+                                      "english_fluency"),
+                     mapping = c("Low-profile, Raised",
+                                "Every day, Weekly",
+                                "Conversational, Professional, Full") )
+
+knitr::kable(data_map,
+             col.names = c("Variable name", 
+                           "Mapping (Baseline first)"),
+             caption = "Data Mappings")
+```
+
+## Tidy and "model-ready" format
+
+-   taking average of the three trials
+-   select relevant columns for model building, dropping accuracy since $WPM \approx \lfloor{\frac {\text{correct keystroke}} {5}}\rfloor$ [(platform faq)](https://10fastfingers.com/faq). The final WPM results has reflected the typing accuracy.
+
+```{r Table 1.3 Typing data dictionary, echo=FALSE}
+typing_data_dict <- tibble(variable_name = c("key_avg_wpm",
+                                             "mobile_fingers",
+                                             "mobile_type",
+                                             "screen_diag_size",
+                                             "key_type",
+                                             "age",
+                                             "key_freq",
+                                             "gamer",
+                                             "musician",
+                                             "physical_limitation",
+                                             "english_fluency",
+                                             "mobile_avg_wpm"),
+                    definition = c("Averaged Keyboard typing speed (WPM)",
+                                   "Mobile device typing posture used in tests",
+                                   "Mobile device type used in tests",
+                                   "Screen size of mobile device used in tests (cm)",
+                                   "Keyboard type used in tests ",
+                                   "Age at the time of tests (years)",
+                                   "Keyboard usage frequency at the time of tests",
+                                   "Gamer at the time of tests",
+                                   "Plays a keyboard instrument at the time of tests",
+                                   "Physical limitation related to typing at the time of tests",
+                                   "English fluency level at the time of tests",
+                                   "Averaged Mobile device typing speed (WPM)")) 
+
+knitr::kable(typing_data_dict,
+             col.names = c("Variable name", 
+                           "Definition"),
+             caption = "Typing Data Dictionary")
+```
+
+```{r data cleaning, include=FALSE}
+# Loading in the raw data 
+typingdata.raw <- read.csv("typingdata.csv")
+
+# Checking missing values
+no_na <- na.omit(typingdata.raw)
+dim(typingdata.raw) == dim(no_na)
+
+# Checking duplicates
+
+no_dup <- matrix(FALSE, 
+                 nrow = nrow(typingdata.raw), 
+                 ncol = ncol(typingdata.raw)) # matrix of FALSE
+#duplicated(typingdata.raw) == no_dup 
+# if there is no duplicates in data, duplicated(.) is a matrix of False
+# then the statement returns matrix of TRUE
+
+# Overview of data
+str(typingdata.raw)
+
+### Rename columns 
+library(data.table)
+old_names <- names(typingdata.raw)
+new_names <- c("key_wpm_01",
+               "key_acc_01",
+               "key_wpm_02",
+               "key_acc_02",
+               "key_wpm_03",
+               "key_acc_03",
+               "mobile_wpm_01",
+               "mobile_acc_01",
+               "mobile_wpm_02",
+               "mobile_acc_02",
+               "mobile_wpm_03",
+               "mobile_acc_03",
+               "mobile_fingers",
+               "mobile_type",
+               "screen_diag_size",
+               "key_type",
+               "age",
+               "key_freq",
+               "gamer",
+               "musician",
+               "physical_limitation",
+               "english_fluency")
+
+to_clean <- setnames(typingdata.raw, old = old_names, new = new_names)
+# at the caveat at also renaming columns in the raw data
+# yet the "rawest" from can always retrieved by reading in the .csv file
+
+### Remove units from observations ###
+
+# remove "WPM" from speed 
+to_clean <- to_clean %>% 
+  mutate_at(vars(contains("wpm")), ~str_remove(., "WPM"))
+
+# remove "%" from accuracy 
+to_clean <- to_clean %>% 
+  mutate_at(vars(contains("acc")), ~str_remove(., "%"))
+
+# remove "cm" and "centimeter" from screen size
+to_clean <- to_clean %>% 
+  mutate_at(vars(contains("screen")), ~str_remove(., "cm"))
+
+to_clean <- to_clean %>% 
+  mutate_at(vars(contains("screen")), ~str_remove(., "centimeters"))
+
+# find dimensionality entries in screen size
+screen_sizes <- tibble::tibble(index = 1:39,
+                               sizes = to_clean$screen_diag_size) 
+
+size_error <- screen_sizes %>%  # find the rows that cannot be converted to numeric
+     dplyr::mutate(row_num = row_number()) %>%
+     filter(is.na(as.numeric(sizes)))
+size_error
+
+# compute diagonal size using Pythagorean
+diag_13 = sqrt(14.67^2 + 7.15^2)
+diag_13
+
+diag_35 = sqrt((78.1/10)^2 + (160.8/10)^2) # convert mm to cm
+diag_35
+
+# impute diagonal lengths
+to_clean$screen_diag_size[13] <- diag_13
+to_clean$screen_diag_size[35] <- diag_35
+
+# handle the inches entry
+which.min(to_clean$screen_diag_size) # the minimum (entered in inches) is at index 14
+mobile_diagonal_inch <- as.numeric(to_clean$screen_diag_size[14])
+to_clean$screen_diag_size[14] <- mobile_diagonal_inch * 2.54
+
+### Change Data Types ###
+cols_to_change <- c("key_wpm_01",
+               "key_acc_01",
+               "key_wpm_02",
+               "key_acc_02",
+               "key_wpm_03",
+               "key_acc_03",
+               "mobile_wpm_01",
+               "mobile_acc_01",
+               "mobile_wpm_02",
+               "mobile_acc_02",
+               "mobile_wpm_03",
+               "mobile_acc_03",
+               "screen_diag_size",
+               "age")
+index_to_change <- match(cols_to_change,
+                         names(to_clean))
+to_clean[ , index_to_change] <- apply(to_clean[ , index_to_change], 
+                                      2, 
+                                      function(x) as.numeric(x))
+str(to_clean) # the mentioned columns are converted to numeric
+dim(to_clean) == dim(na.omit(to_clean)) # no nas introduced by conversion
+
+### Map Values ###
+
+# for keyboard frequency
+old_key_freqs = c("Every day or almost every day", 
+                  "A few times per week",
+                  "A few times per month or less")
+to_clean$key_freq <- plyr::mapvalues(to_clean$key_freq, 
+                                     from = old_key_freqs,
+                                     to = c("Every day", "Weekly", "Monthly"))
+to_clean$key_freq 
+# current baseline is "Every day"
+levels(as.factor(to_clean$key_freq))[1] 
+
+# for keyboard type
+old_key_types = c("A laptop keyboard, with low-profile keys (so the keys don't go down much when you type)", "A mechanical keyboard, with raised keys (i.e. a keyboard that is not built in to a laptop, but that is either connected via a cable or bluetooth)")
+to_clean$key_type <- plyr::mapvalues(to_clean$key_type, 
+                                     from = old_key_types,
+                                     to = c("Low-profile", "Raised"))
+to_clean$key_type 
+# current baseline is "Low-profile"
+levels(as.factor(to_clean$key_type))[1] 
+
+# for english fluency
+old_fluency = c("Fully fluent in English", "Professional fluency in English", "Conversational fluency in English")
+to_clean$english_fluency <- plyr::mapvalues(to_clean$english_fluency, 
+                                     from = old_fluency,
+                                     to = c("Full", "Professional", "Conversational"))
+# current baseline is "Conversational"
+levels(as.factor(to_clean$english_fluency))[1]
+# relevel such that Full > Professional > Conversational
+to_clean$english_fluency <- factor(to_clean$english_fluency, 
+                                   levels = c("Conversational", "Professional", "Full"))
+levels(as.factor(to_clean$english_fluency))[2]
+levels(as.factor(to_clean$english_fluency))[3]
+
+### Tidy and model-ready format ###
+
+# average across 3 trials
+to_clean <- to_clean %>% 
+  mutate(key_avg_wpm = floor((key_wpm_01 + key_wpm_02 + key_wpm_03) / 3), # take floor for wpm
+         key_avg_acc = (key_acc_01 + key_acc_02 + key_acc_03) / 3,
+         mobile_avg_wpm = floor((mobile_wpm_01 + mobile_wpm_02 + mobile_wpm_03) / 3),
+         mobile_avg_acc = (mobile_acc_01 + mobile_acc_02 + mobile_acc_03) / 3)
+# cwpm per trial
+
+# select relevant columns for model building
+typing_data <- to_clean %>% select(key_avg_wpm, # "x"
+                                   mobile_fingers,
+                                   mobile_type,
+                                   screen_diag_size,
+                                   key_type,
+                                   age,
+                                   key_freq,
+                                   gamer,
+                                   musician,
+                                   physical_limitation,
+                                   english_fluency, 
+                                   mobile_avg_wpm) #"y"
+```
+
+\newpage
+
+# Methods
+
+Let us recall that the primary research question is **"Do people who type fast on a keyboard also type faster on their mobile phones?"**. In essence, the research question wants to understand **do individuals with high typing speed on the keyboard also have high typing speed on mobile devices**. We care more about whether this positive association between computer keyboard typing speed and mobile device typing speed exists **across individuals** rather than the existence of the association **within each individual**. Thus for each individual, the averaged typing speed is kept and used for analyses.
+
+A fixed effects multiple linear regression is chosen to model the relationship between keyboard typing speed and mobile device typing speed.
+
+## Model Assumptions
+
+### 1. Independence of observations 
+
+Other than enrolling in the same course, there is **no known inter-correlation among the individuals** relevant to typing speed (e.g. the course enrollment is not based on any evaluation of typing proficiency). Thus we do have **39 independent observations**.
+
+### 2. Linearity in parameters
+
+The scatterplot between keyboard typing speed and mobile typing speed shows **an approximately linear trend**  (Figure 1 in Full statistical analysis). There is no sufficient evidence suggesting that other variables have a non-linear effect on the mobile device typing speed (Figure 2-11)
+
+### 3. No perfect collinearity between regressors 
+
+There is some concern since some factors (e.g. age, physical limitation and English fluency) affect the typing speed on both devices simultaneously.
+
+**The normality and homoskedasticity of the error term** are addressed in the **Model Diagnostics** section.
+
+## Candidate model specification
+
+Let $Y_i=$Averaged Mobile device typing speed (WPM).
+
+By careful visual inspection of the relevant plots (Motivating Plots for Candidate model), for individual $i$, we have a smaller list of interested covariates:
+
+```{r Table 2 Covariates Of Interest, echo=FALSE}
+cov_dict <- tibble(variable_name = c("key_avg_wpm",
+                                     "mobile_type",
+                                     "screen_diag_size",
+                                     "key_type",
+                                     "age",
+                                     "gamer",
+                                     "musician",
+                                     "physical_limitation",
+                                     "english_fluency = Professional",
+                                     "english_fluency = Full"),
+                           covariate_num = rep(1:10),
+                           definition = c("Averaged Keyboard typing speed (WPM)",
+                                   "Mobile device type used in tests",
+                                   "Screen size of mobile device used in tests (cm)",
+                                   "Keyboard type used in tests ",
+                                   "Age at the time of tests (years)",
+                                   "Gamer at the time of tests",
+                                   "Plays a keyboard instrument at the time of tests",
+                                   "Physical limitation related to typing at the time of tests",
+                                   "Professional English fluency at the time of tests",
+                                   "Full English fluency at the time of tests")) 
+
+knitr::kable(cov_dict,
+             col.names = c("Predictor",
+                           "z index",
+                           "Definition"),
+             caption = "Covariates Of Interest")
+```
+
+The plots also suggest potential interactions:
+
+- $z_{i1}z_{i4}=$ interaction between the averaged keyboard typing speed (WPM) and keyboard type used in tests
+- $z_{i1}z_{i7}=$ interaction between the averaged keyboard typing speed (WPM) and playing a keyboard instrument
+- $z_{i1}z_{i9}=$ interaction between the averaged keyboard typing speed (WPM) and professional English fluency
+- $z_{i1}z_{i10}=$ interaction between the averaged keyboard typing speed (WPM) and full English fluency
+
+Then building the below candidate linear regression models.
+
+### Model I. Include all covariates of interest in the model
+
+$$Y_i = \beta_0 + \sum_{j=1}^{10}\beta_jz_{ij}+ \epsilon_i$$
+
+### Model II. Fit a model with "plot-selected" predictors AND interactions
+
+$$Y_i = \beta_0 + \sum_{j=1}^{6}\beta_jz_{ij} + \beta_7z_{i9} + \beta_{8}z_{i10} + \beta_{9}z_{i1}z_{i4} + \beta_{10}z_{i1}z_{i7} + \beta_{11}z_{i1}z_{i9}+ \beta_{12}z_{i1}z_{i10}+ \epsilon_i$$
+
+### Model III. Fit a model with ONLY "plot-selected" predictors
+
+$$Y_i = \beta_0 + \sum_{j=1}^{6}\beta_jz_{ij} + \beta_7z_{i9} + \beta_{8}z_{i10} + \epsilon_i$$
+
+### Model IV. Fit a model with only average keyboard WPM as the predictor
+
+$$Y_i = \beta_0 + \beta_1z_{i1} + \epsilon_i$$
+
+## Model Selection
+
+In our case, the true model is unknown and may not be one of the candidate models above. **AIC is being used when trying to find the model that best describes the data**. The lower the AIC value is, the better the model is at describing the data.
+
+After comparing the AIC of the candidate models, we have one optimal candidate model. However, considering that we have a small set of data and the difference in the number of predictors and the number of independent observations is not large, there is a **threat of model overfitting**.
+
+Thus we use the **likelihood ratio test** to compare the candidate model against the simplest model (only using averaged keyboard typing speed as the predictor) to decide which one of them fits the data better.
+
+## Model Diagnostics
+
+Three plots are closely examined to **check the normality of homoskedasticity** of the error terms.
+
+1. Plot of residuals versus fitted values
+2. Plot of residuals versus leverage
+3. Normal Quantile-Quantile plot
+
+\newpage
+
+# Results
+
+```{r models, include=FALSE}
+# full: 1-10
+model.full <- lm(mobile_avg_wpm ~ key_avg_wpm + as.factor(mobile_type) +
+                    screen_diag_size + as.factor(key_type) + age + as.factor(gamer) + 
+                   as.factor(musician) + as.factor(physical_limitation) + 
+                   as.factor(english_fluency), 
+                 data = typing_data)
+
+# interaction model: 1-6, 9, 10, "1,4", "1,7", "1,9", "1,10"
+model.inter <- lm( mobile_avg_wpm ~ key_avg_wpm + as.factor(mobile_type) + screen_diag_size 
+                   + as.factor(key_type) + age + as.factor(gamer) 
+                   + as.factor(english_fluency) 
+                   + key_avg_wpm*as.factor(key_type) 
+                   + key_avg_wpm*as.factor(musician) 
+                   + key_avg_wpm*as.factor(english_fluency), 
+                   data = typing_data )
+
+# partial model: 1-6, 9, 10
+model.partial <- lm(mobile_avg_wpm ~ key_avg_wpm + as.factor(mobile_type) + screen_diag_size 
+                   + as.factor(key_type) + age + as.factor(gamer) 
+                   + as.factor(english_fluency),
+                     data = typing_data)
+
+# keyOnly model-slr for keyboard versus mobile typing speed
+model.keyOnly <- lm(mobile_avg_wpm ~ key_avg_wpm, data = typing_data)
+
+# AIC of models
+paste0("The AIC of the full model is: ", AIC(model.full))
+paste0("The AIC of the interaction model is: ", AIC(model.inter))
+paste0("The AIC of the partial model is: ", AIC(model.partial))
+paste0("The AIC of the simple model is: ", AIC(model.keyOnly))
+
+# LRT of models
+lrt <- lmtest::lrtest(model.partial, model.keyOnly)
+lrt.pval <- lrt$`Pr(>Chisq)`[2]
+```
+
+The final model, based on AIC and likelihood ratio test, is **Model III** using "plot-selected" predictors. $$Y_i = \beta_0 + \sum_{j=1}^{6}\beta_jz_{ij} + \beta_7z_{i9} + \beta_{8}z_{i10} + \epsilon_i$$
+
+```{r Table 3: table of coefficients, echo=FALSE}
+model.partial %>%
+  broom::tidy() %>% 
+  mutate(term = c("Intercept", 
+                  "Keyboard typing speed (WPM)", 
+                  "Mobile device type: iPhone",
+                  "Mobile device screen size (cm)",
+                  "Keyboard type: Raised",
+                  "Age",
+                  "Gamer: Yes",
+                  "English fluency: Professional",
+                  "English fluency: Full")) %>%
+  knitr::kable(digits = 4,
+               col.names = c("Term", 
+                             "Estimate", 
+                             "Std. Error", 
+                             "t-statistic", 
+                             "p-value (for Wald test)"),
+               caption = "Regression Analysis of Mobile Device Typing Speed on Selected Predictors")
+```
+
+There is a statistically **significant and positive linear association between the keyboard typing speed and the typing speed on a mobile device**. That is, we may answer a **"yes" to our research question**: "do people who type fast on a keyboard also type faster on their mobile phones?". Holding all other model covariates constant, the mobile device typing speed is estimated to increase, on average, by at least `r floor(10*0.3387)` words per minute when we type 10 more words per minute on a keyboard. 
+
+Additionally, the effect of mobile device type on typing speed is also statistically significant. It is estimated that iPhone users can type at least `r floor(10.5396)` more words per minute compared to Android users, controlling for all other predictors.
+
+Although the effects of all other covariates on mobile device typing speed were not statistically significant, there is one unexpected estimate. Reading from Table 5, the direction of association between mobile device's screen size and mobile typing speed is opposite to Figure 4. One may also have some concern about the positive association between using a raised (mechanical) keyboard and mobile typing speed could be due to a correlation between predictors. 
+
+\newpage
+
+# Results
+
+```{r results viz, echo=FALSE}
+typing_data %>% ggplot(aes(x=key_avg_wpm, y=mobile_avg_wpm, color=as.factor(mobile_type))) + 
+  geom_point() +
+  geom_smooth(mapping = aes(x=key_avg_wpm, y=mobile_avg_wpm),
+              method = "lm",
+              formula = y~x) +
+  labs(x = "Keyboard Typing Speed (WPM)",
+       y = "Mobile Device Typing Speed (WPM)",
+       title = "Keyboard versus Mobile Typing Speed across Mobile Device Types",
+       subtitle = "iPhone users are going to win the typing race?",
+       colour = "Mobile Device Type") +
+  scale_colour_viridis_d() +
+  theme_minimal() 
+```
+
+
+\newpage
+
+# Full Statistical Analysis
+
+## Data Cleaning Code
+
+Below code for data cleaning does the following:
+
+1. Checking missing values and duplicates in raw data
+2. Get an overview of the raw data
+3. Rename data columns
+4. Remove units from observations
+5. Convert to appropriate data types
+6. (Re-)mapping the categorical variables: `key_freq`, `key_type` and `english_fluency`
+7. Select the subset of columns for model building
+
+The data cleaning is implemented by R packages `tidyverse`, `dplyr`, `data.table`, `tidyselect` and `plyr`.
+
+```{r data cleaning steps, warning=FALSE}
+# Loading in the raw data 
+typingdata.raw <- read.csv("typingdata.csv")
+
+# Checking missing values
+no_na <- na.omit(typingdata.raw)
+dim(typingdata.raw) == dim(no_na)
+
+# Checking duplicates
+
+no_dup <- matrix(FALSE, 
+                 nrow = nrow(typingdata.raw), 
+                 ncol = ncol(typingdata.raw)) # matrix of FALSE
+#duplicated(typingdata.raw) == no_dup 
+# if there is no duplicates in data, duplicated(.) is a matrix of False
+# then the statement returns matrix of TRUE
+
+# Overview of data
+str(typingdata.raw)
+
+### Rename columns 
+library(data.table)
+old_names <- names(typingdata.raw)
+new_names <- c("key_wpm_01",
+               "key_acc_01",
+               "key_wpm_02",
+               "key_acc_02",
+               "key_wpm_03",
+               "key_acc_03",
+               "mobile_wpm_01",
+               "mobile_acc_01",
+               "mobile_wpm_02",
+               "mobile_acc_02",
+               "mobile_wpm_03",
+               "mobile_acc_03",
+               "mobile_fingers",
+               "mobile_type",
+               "screen_diag_size",
+               "key_type",
+               "age",
+               "key_freq",
+               "gamer",
+               "musician",
+               "physical_limitation",
+               "english_fluency")
+
+to_clean <- setnames(typingdata.raw, old = old_names, new = new_names)
+# at the caveat at also renaming columns in the raw data
+# yet the "rawest" from can always retrieved by reading in the .csv file
+
+### Remove units from observations 
+
+# remove "WPM" from speed 
+to_clean <- to_clean %>% 
+  mutate_at(vars(contains("wpm")), ~str_remove(., "WPM"))
+
+# remove "%" from accuracy 
+to_clean <- to_clean %>% 
+  mutate_at(vars(contains("acc")), ~str_remove(., "%"))
+
+# remove "cm" and "centimeter" from screen size
+to_clean <- to_clean %>% 
+  mutate_at(vars(contains("screen")), ~str_remove(., "cm"))
+
+to_clean <- to_clean %>% 
+  mutate_at(vars(contains("screen")), ~str_remove(., "centimeters"))
+
+# find dimensionality entries in screen size
+screen_sizes <- tibble::tibble(index = 1:39,
+                               sizes = to_clean$screen_diag_size) 
+
+size_error <- screen_sizes %>%  # find the rows that cannot be converted to numeric
+     dplyr::mutate(row_num = row_number()) %>%
+     filter(is.na(as.numeric(sizes)))
+size_error
+
+# compute diagonal size using Pythagorean
+diag_13 = sqrt(14.67^2 + 7.15^2)
+diag_13
+
+diag_35 = sqrt((78.1/10)^2 + (160.8/10)^2) # convert mm to cm
+diag_35
+
+# impute diagonal lengths
+to_clean$screen_diag_size[13] <- diag_13
+to_clean$screen_diag_size[35] <- diag_35
+
+# handle the inches entry
+which.min(to_clean$screen_diag_size) # the minimum (entered in inches) is at index 14
+mobile_diagonal_inch <- as.numeric(to_clean$screen_diag_size[14])
+to_clean$screen_diag_size[14] <- mobile_diagonal_inch * 2.54
+
+### Change Data Types 
+cols_to_change <- c("key_wpm_01",
+               "key_acc_01",
+               "key_wpm_02",
+               "key_acc_02",
+               "key_wpm_03",
+               "key_acc_03",
+               "mobile_wpm_01",
+               "mobile_acc_01",
+               "mobile_wpm_02",
+               "mobile_acc_02",
+               "mobile_wpm_03",
+               "mobile_acc_03",
+               "screen_diag_size",
+               "age")
+index_to_change <- match(cols_to_change,
+                         names(to_clean))
+to_clean[ , index_to_change] <- apply(to_clean[ , index_to_change], 
+                                      2, 
+                                      function(x) as.numeric(x))
+str(to_clean) # the mentioned columns are converted to numeric
+dim(to_clean) == dim(na.omit(to_clean)) # no NAs introduced by conversion
+
+### Map Values 
+
+# for keyboard frequency
+old_key_freqs = c("Every day or almost every day", 
+                  "A few times per week",
+                  "A few times per month or less")
+to_clean$key_freq <- plyr::mapvalues(to_clean$key_freq, 
+                                     from = old_key_freqs,
+                                     to = c("Every day", "Weekly", "Monthly"))
+to_clean$key_freq 
+# current baseline is "Every day"
+levels(as.factor(to_clean$key_freq))[1] 
+
+# for keyboard type
+old_key_types = c("A laptop keyboard, with low-profile keys (so the keys don't go down much when you type)", "A mechanical keyboard, with raised keys (i.e. a keyboard that is not built in to a laptop, but that is either connected via a cable or bluetooth)")
+to_clean$key_type <- plyr::mapvalues(to_clean$key_type, 
+                                     from = old_key_types,
+                                     to = c("Low-profile", "Raised"))
+to_clean$key_type 
+# current baseline is "Low-profile"
+levels(as.factor(to_clean$key_type))[1] 
+
+# for english fluency
+old_fluency = c("Fully fluent in English", "Professional fluency in English", "Conversational fluency in English")
+to_clean$english_fluency <- plyr::mapvalues(to_clean$english_fluency, 
+                                     from = old_fluency,
+                                     to = c("Full", "Professional", "Conversational"))
+# current baseline is "Conversational"
+levels(as.factor(to_clean$english_fluency))[1]
+# relevel such that Full > Professional > Conversational
+to_clean$english_fluency <- factor(to_clean$english_fluency, 
+                                   levels = c("Conversational", "Professional", "Full"))
+levels(as.factor(to_clean$english_fluency))[2]
+levels(as.factor(to_clean$english_fluency))[3]
+
+### Tidy and model-ready format 
+
+# average across 3 trials
+to_clean <- to_clean %>% 
+  mutate(key_avg_wpm = floor((key_wpm_01 + key_wpm_02 + key_wpm_03) / 3), # take floor for wpm
+         key_avg_acc = (key_acc_01 + key_acc_02 + key_acc_03) / 3,
+         mobile_avg_wpm = floor((mobile_wpm_01 + mobile_wpm_02 + mobile_wpm_03) / 3),
+         mobile_avg_acc = (mobile_acc_01 + mobile_acc_02 + mobile_acc_03) / 3)
+# cwpm per trial
+
+# select relevant columns for model building
+typing_data <- to_clean %>% select(key_avg_wpm, # "x"
+                                   mobile_fingers,
+                                   mobile_type,
+                                   screen_diag_size,
+                                   key_type,
+                                   age,
+                                   key_freq,
+                                   gamer,
+                                   musician,
+                                   physical_limitation,
+                                   english_fluency, 
+                                   mobile_avg_wpm) #"y"
+str(typing_data)
+```
+
+\newpage
+
+## Motivating Plots for Candidate Model
+
+The variables having *relative* balance and reasonable amount of variation across are kept for the Model I and II.
+
+```{r Fig 1: scatterplot of keyboard vs mobile wpm-slr}
+typing_data %>% 
+  ggplot(aes(x=key_avg_wpm, y=mobile_avg_wpm)) +
+  geom_point(aes(color = key_avg_wpm)) +
+  labs(x = "Keyboard Typing Speed (WPM)",
+       y = "Mobile Device Typing Speed (WPM)",
+       title = "Figure 1: Keyboard versus Mobile typing speed",
+       colour = "Keyboard Typing Speed (WPM)") +
+  scale_colour_viridis_c() +
+  theme_minimal() 
+```
+
+Figure 1: A positive linear association between keyboard and mobile typing speed.
+
+```{r Fig 2: mobile_finger vs mobile wpm-no}
+typing_data %>% ggplot(aes(x=mobile_fingers, y=mobile_avg_wpm)) + 
+  geom_point(aes(color = mobile_fingers)) + 
+  labs(x = "Mobile Typing Posture", 
+       y = "Mobile Device Typing Speed (WPM)",
+       title = "Figure 2: Mobile Typing Posture versus Mobile typing speed",
+       colour = "Mobile Typing Posture") +
+  scale_colour_viridis_d() +
+  theme_minimal()
+```
+
+Figure 2: There is ONLY ONE subject typing with one finger. No enough information on how different touch typing postures on a mobile device could affect typing speed. Thus **not including `mobile_finger` in Model I ("full" model)**.
+
+```{r Fig 3: mobile_type vs mobile wpm-partial}
+typing_data %>% ggplot(aes(x=mobile_type, y=mobile_avg_wpm)) + 
+  geom_point(aes(color = mobile_type)) + 
+  labs(x = "Mobile Device Type", 
+       y = "Mobile Device Typing Speed (WPM)",
+       title = "Figure 3: Mobile Device Type versus Mobile typing speed",
+       colour = "Mobile Device Type") +
+  scale_colour_viridis_d() +
+  theme_minimal()
+```
+
+Figure 3: There is a visible difference in mobile typing speed between iPhone user and Android user. One caveat is that there are ONLY FOUR subjects using Android.
+
+```{r Fig 4: screen_diag vs mobile wpm-partial}
+typing_data %>% 
+  ggplot(aes(x=screen_diag_size, y=mobile_avg_wpm, color=screen_diag_size)) +
+  geom_point() +
+  labs(x = "Mobile Device Screen Size (cm)", 
+       y = "Mobile Device Typing Speed (WPM)",
+       title = "Figure 4: Mobile Device Screen Size versus Mobile typing speed",
+       colour = "Mobile Device Screen Size") +
+  scale_colour_viridis_c() +
+  theme_minimal() 
+```
+
+Figure 4: A negative linear association between mobile screen size and typing speed on a mobile device.
+
+```{r Fig 5: key_type vs mobile wpm-inter-partial}
+typing_data %>% ggplot(aes(x=key_type, y=mobile_avg_wpm)) + 
+  geom_boxplot(aes(color = key_type)) + 
+  scale_colour_viridis_d() +
+  labs(x = "Keyboard Type", 
+       y = "Mobile Device Typing Speed (WPM)",
+       title = "Figure 5a: Keyboard Type versus Mobile Typing Speed",
+       colour = "Keyboard Type") +
+  theme_minimal()
+
+
+# interaction or not
+typing_data %>% ggplot(aes(x=key_avg_wpm, y=mobile_avg_wpm, color=as.factor(key_type))) + 
+  geom_point() +
+  geom_smooth(mapping = aes(x=key_avg_wpm, y=mobile_avg_wpm),
+              method = "lm",
+              formula = y~x) + 
+  labs(x = "Keyboard Typing Speed (WPM)",
+       y = "Mobile Device Typing Speed (WPM)",
+       title = "Figure 5b: Keyboard versus Mobile Typing Speed between Keyboard Types",
+       colour = "Keyboard Type") +
+  scale_colour_viridis_d() +
+  theme_minimal() 
+```
+
+Figure 5a, 5b: There is a visible difference in typing speed between using a low-profile keyboard versus a raise one. **Yet** (i) there is ONLY SIX subjects using raised, mechanical keyboard (ii) **collinearity** between keyboard type and typing speed on the keyboard when including this variable in the model.
+
+```{r Fig 6: age vs mobile wpm-partial}
+# mobile speed across age
+typing_data %>% 
+  ggplot(aes(x=age, y=mobile_avg_wpm, color=age)) +
+  geom_point() +
+  labs(x = "Age (years)", 
+       y = "Mobile Device Typing Speed (WPM)",
+       title = "Figure 6a: Age versus Mobile Typing Speed",
+       colour = "Age") +
+  scale_colour_viridis_c() +
+  theme_minimal() 
+
+# interaction or not: scatterplot colored with age
+typing_data %>% ggplot(aes(x=key_avg_wpm, y=mobile_avg_wpm, color=as.factor(age))) + 
+  geom_point() +
+  geom_smooth(mapping = aes(x=key_avg_wpm, y=mobile_avg_wpm),
+              method = "lm",
+              formula = y~x,
+              se = FALSE) +
+  labs(x = "Keyboard Typing Speed (WPM)",
+       y = "Mobile Device Typing Speed (WPM)",
+       title = "Figure 6b: Keyboard versus Mobile Typing Speed across Ages",
+       colour = "Age") +
+  scale_colour_viridis_d() +
+  theme_minimal() 
+```
+
+Figure 6a, 6b: There is a negative linear association between age and typing speed on a mobile device, for those at the age of 20-22. **Yet** there are only three observations for age 20, three observations in total for 23-24.
+
+Some "next steps" on age, if more data is available with more variations in age:
+
+- Try including $\text{age}^2$ in the model, a "turning points" for the age's effect on mobile typing speed
+- Interaction term between keyboard typing speed and **Age group**
+
+```{r Fig 7: key_freq vs mobile wpm-no}
+typing_data %>% ggplot(aes(x=as.factor(key_freq), y=mobile_avg_wpm)) + 
+  geom_point(aes(color = as.factor(key_freq))) + 
+  scale_colour_viridis_d() +
+  labs(x = "Keyboard Usage Frequency", 
+       y = "Mobile Device Typing Speed (WPM)",
+       title = "Figure 7: Keyboard Usage Frequency versus Mobile Typing Speed",
+       colour = "Keyboard Usage Frequency") +
+  theme_minimal()
+```
+
+Figure 7: There are ONLY TWO individuals who do not type on a computer keyboard every day. Too little information on how different keyboard usage frequency affects typing speed. Thus **not including `key_freq` in Model I ("full" model)**.
+
+```{r Fig 8: gamer vs mobile wpm-partial}
+typing_data %>% ggplot(aes(x=as.factor(gamer), y=mobile_avg_wpm)) + 
+  geom_boxplot(aes(color = as.factor(gamer))) + 
+  scale_colour_viridis_d() +
+  labs(x = "Gamer", 
+       y = "Mobile Device Typing Speed (WPM)",
+       title = "Figure 8a: Gamer versus Mobile Typing Speed",
+       colour = "Gamer") +
+  theme_minimal()
+
+# interaction or not
+typing_data %>% ggplot(aes(x=key_avg_wpm, y=mobile_avg_wpm, color=as.factor(gamer))) + 
+  geom_point() +
+  geom_smooth(mapping = aes(x=key_avg_wpm, y=mobile_avg_wpm),
+              method = "lm",
+              formula = y~x) + 
+  labs(x = "Keyboard Typing Speed (WPM)",
+       y = "Mobile Device Typing Speed (WPM)",
+       title = "Figure 8b: Keyboard versus Mobile Typing Speed between (Non-)gamers",
+       colour = "Gamer") +
+  scale_colour_viridis_d() +
+  theme_minimal() 
+```
+
+Figure 8a, 8b: There is a visible difference in typing speed between gamer and non-gamer. No interactions.
+
+```{r Fig 9: musician vs mobile wpm-inter}
+typing_data %>% ggplot(aes(x=as.factor(musician), y=mobile_avg_wpm)) + 
+  geom_point(aes(color = as.factor(musician))) + 
+  scale_colour_viridis_d() +
+  labs(x = "Musician", 
+       y = "Mobile Device Typing Speed (WPM)",
+       title = "Figure 9a: Musician versus Mobile typing speed",
+       colour = "Musician") +
+  theme_minimal() 
+
+# interaction or not
+typing_data %>% ggplot(aes(x=key_avg_wpm, y=mobile_avg_wpm, color=as.factor(musician))) + 
+  geom_point() +
+  geom_smooth(mapping = aes(x=key_avg_wpm, y=mobile_avg_wpm),
+              method = "lm",
+              formula = y~x) + 
+  labs(x = "Keyboard Typing Speed (WPM)",
+       y = "Mobile Device Typing Speed (WPM)",
+       title = "Figure 9b: Keyboard versus Mobile Typing Speed across (Non-)musicians",
+       colour = "Musician") +
+  scale_colour_viridis_d() +
+  theme_minimal()
+```
+
+Figure 9a, 9b: Potential interaction between playing a keyboard instrument and keyboard typing speed.
+
+```{r Fig 10: physical_limitation vs mobile wpm-full}
+typing_data %>% ggplot(aes(x=as.factor(physical_limitation), y=mobile_avg_wpm)) + 
+  geom_point(aes(color = as.factor(physical_limitation))) + 
+  scale_colour_viridis_d() +
+  labs(x = "Physical Limitation", 
+       y = "Mobile Device Typing Speed (WPM)",
+       title = "Figure 10: Physical Limitation versus Mobile typing speed",
+       colour = "Physical Limitation") +
+  theme_minimal()
+```
+
+Figure 10: Physical limitations do have a downward impact on mobile typing speed. **Yet** there are ONLY 4 subject with physical limitation.
+
+```{r Fig 11: english_fluency vs mobile wpm-inter-partial}
+typing_data %>% ggplot(aes(x=as.factor(english_fluency), y=mobile_avg_wpm)) + 
+  geom_boxplot(aes(color = as.factor(english_fluency))) + 
+  scale_colour_viridis_d() +
+  labs(x = "English Fluency", 
+       y = "Mobile Device Typing Speed (WPM)",
+       title = "Figure 11a: English Fluency versus Mobile typing speed",
+       colour = "English Fluency") +
+  theme_minimal() 
+
+# interaction or not
+typing_data %>% ggplot(aes(x=key_avg_wpm, y=mobile_avg_wpm, color=as.factor(english_fluency))) + 
+  geom_point() +
+  geom_smooth(mapping = aes(x=key_avg_wpm, y=mobile_avg_wpm),
+              method = "lm",
+              formula = y~x) + 
+  labs(x = "Keyboard Typing Speed (WPM)",
+       y = "Mobile Device Typing Speed (WPM)",
+       title = "Figure 11b: Keyboard versus Mobile typing speed across English Fluency Levels",
+       colour = "English Fluency") +
+  scale_colour_viridis_d() +
+  theme_minimal()
+```
+
+Figure 11a, 11b: Potential positive associaton between English fluency level and mobile device typing speed. Potential interaction between English fluency level and keyboard typing speed.
+
+## Model Building
+
+```{r full model}
+model.full <- lm(mobile_avg_wpm ~ key_avg_wpm + as.factor(mobile_type) +
+                    screen_diag_size + as.factor(key_type) + age + as.factor(gamer) + 
+                   as.factor(musician) + as.factor(physical_limitation) + 
+                   as.factor(english_fluency), 
+                 data = typing_data)
+summary(model.full)
+```
+
+```{r interaction model}
+model.inter <- lm( mobile_avg_wpm ~ key_avg_wpm + as.factor(mobile_type) + screen_diag_size 
+                   + as.factor(key_type) + age + as.factor(gamer) 
+                   + as.factor(english_fluency) 
+                   + key_avg_wpm*as.factor(key_type) 
+                   + key_avg_wpm*as.factor(musician) 
+                   + key_avg_wpm*as.factor(english_fluency), 
+                   data = typing_data )
+summary(model.inter)
+```
+
+```{r partial model based on plots}
+model.partial <- lm(mobile_avg_wpm ~ key_avg_wpm + as.factor(mobile_type) + screen_diag_size 
+                   + as.factor(key_type) + age + as.factor(gamer) 
+                   + as.factor(english_fluency),
+                     data = typing_data)
+summary(model.partial)
+```
+
+```{r keyOnly model-slr for keyboard versus mobile typing speed}
+model.keyOnly <- lm(mobile_avg_wpm ~ key_avg_wpm, data = typing_data)
+summary(model.keyOnly)
+```
+
+## Model Selection
+
+Starting with comparison of AIC across candidate models.
+
+```{r AIC of models}
+paste0("The AIC of the full model is: ", AIC(model.full))
+paste0("The AIC of the interaction model is: ", AIC(model.inter))
+paste0("The AIC of the partial model is: ", AIC(model.partial))
+paste0("The AIC of the simple model is: ", AIC(model.keyOnly))
+```
+
+Then we compare the partial model with the simple model using te likelihood ratio test. 
+
+Under $H_0$, we have the model as $Y_i = \beta_0 + \beta_1z_{i1} + \epsilon_i$. Let $\tilde \beta_0, \tilde \beta_1$ be the mles under this restricted model.
+
+Under $H_1$, we have the model as $Y_i = \beta_0 + \sum_{j=1}^{6}\beta_jz_{ij} + \beta_7z_{i9} + \beta_{8}z_{i10} + \epsilon_i$ be the mles under this unrestricted model.
+
+(Equivalently, $H_0: \beta_2, ...,\beta_6, \beta_7, \beta_8 = 0$ versus $H_1: \text{at least one of }\\beta_2, ...,\beta_6, \beta_7, \beta_8 \neq 0$)
+
+$$\Lambda_\text{obs} = 2[l(\hat \beta_0, \hat \beta_1, \hat \beta_2, ...,\hat \beta_6, \hat \beta_7, \hat \beta_8)-l(\tilde \beta_0, \tilde \beta_1)] \approx \chi^2_{df=7}$$
+
+```{r LRT of partial vs keyOnly models}
+lrt <- lmtest::lrtest(model.partial, model.keyOnly)
+lrt
+
+lrt.pval <- lrt$`Pr(>Chisq)`[2]
+```
+
+Based on the output from the LR test, the observed LR test statistic is associated with a small p-value `r lrt.pval`, suggesting strong evidence against the null hypothesis that the simple model fit data better. To conclude, the simple model is *not as good as* the partial model for the data.
+
+## Final Model Results
+
+```{r model results}
+model.partial %>%
+  broom::tidy() %>% 
+  mutate(term = c("Intercept", 
+                  "Keyboard typing speed (WPM)", 
+                  "Mobile device type: iPhone",
+                  "Mobile device screen size (cm)",
+                  "Keyboard type: Raised",
+                  "Age",
+                  "Gamer: Yes",
+                  "English fluency: Professional",
+                  "English fluency: Full")) %>%
+  knitr::kable(digits = 4,
+               col.names = c("Term", 
+                             "Estimate", 
+                             "Std. Error", 
+                             "t-statistic", 
+                             "p-value (for Wald test)"),
+               caption = "Regression Analysis of Mobile Device Typing Speed on Selected Predictors")
+```
+
+```{r results viz code}
+typing_data %>% ggplot(aes(x=key_avg_wpm, y=mobile_avg_wpm, color=as.factor(mobile_type))) + 
+  geom_point() +
+  geom_smooth(mapping = aes(x=key_avg_wpm, y=mobile_avg_wpm),
+              method = "lm",
+              formula = y~x) +
+  labs(x = "Keyboard Typing Speed (WPM)",
+       y = "Mobile Device Typing Speed (WPM)",
+       title = "Keyboard versus Mobile Typing Speed Across Mobile Device Type",
+       subtitle = "iPhone users are going to win the typing race?",
+       colour = "Mobile Device Type") +
+  scale_colour_viridis_d() +
+  theme_minimal() 
+```
+
+## Model Diagnostics
+
+```{r Fig 12: fitted-residual plot}
+plot(model.partial, which = 1,
+     caption = "Residuals vs Fitted Value")
+```
+
+Diagnostics 1: Plot of residuals versus fitted values
+
+By visual inspection,
+
+- no systematic pattern in the residuals, linearity of the relationship
+- no cluster of residuals, independence of errors
+- no fanning pattern, constant variance
+
+```{r Fig 13: residual-leverage plot}
+plot(model.partial, which = 5)
+```
+
+Diagnostics 2: Plot of residuals versus leverage
+
+Observation #17 lies closest to the border of Cook’s distance, but it doesn’t fall outside of the dashed line. This means there are not any influential points in our regression model.
+
+
+```{r Fig 14: normal q-q plot}
+plot(model.partial, which = 2)
+
+# "t studentized" q-q plot
+car::qqPlot(model.partial, 
+            main = "Q-Q plot for model residuals",
+            distribution = "norm",
+            xlab = "Normal Quantiles",
+            ylab = "Studentized Residuals",
+            envelope=.95)
+```
+
+Diagnostics 3: Normal Quantile-Quantile plot
+
+Majority of the standardized residuals stay close enough with the theoretical normal quantiles.
+
