@@ -209,7 +209,7 @@ A [\textcolor{blue} {news article}](https://www.cnet.com/tech/mobile/people-can-
 
 The analysis leverages data on typing speed and relevant characteristics collected from students enrolled in a fourth-year statistics course (STA490) at the University of Toronto. Using the individual-level data, we employ a **multiple linear regression model** to understand the association between the computer keyboard typing speed and the typing speed on mobile devices.
 
-The remainder of the report is organized as follows. **Data Summary** introduces the data, variables and averaging used in the analysis. **Methods** describes the study design and model considerations. **Results** reports the regression results. **Discussion** discusses limitations in the analysis and future considerations, finally **Conclusion** concludes the findings from the analysis.
+The remainder of the report is organized as follows. **Data Summary** introduces the data, variables and averaging used in the analysis. **Methods** describes the study design and model considerations. **Results** reports the regression results. **Discussion** discusses limitations in the analysis and future considerations, and finally **Conclusion** concludes the findings from the analysis.
 
 # Data Summary
 
@@ -463,9 +463,9 @@ On top of the model's non-satisfactory performance in capturing data patterns, t
 
 ## Limitation 2: Under-representative Data
 
-Sampling from the STA490 class is indeed convenient, yet it comes with some issues with the data. In a handful of variables, there is an evident lack of variation. Students enrolled in a fourth-year course are roughly the same age. The majority of the class types on a keyboard every day and uses two fingers when typing on a mobile phone. The prevalent use of the iPhone not only results in small variations in mobile device type, but also affects the screen sizes since iPhones have similar sizes despite the students may have different phone models.
+Sampling from the STA490 class is indeed convenient, yet it comes with some issues with the data. In a handful of variables, there is an evident lack of variation. Students enrolled in a fourth-year course are roughly the same age. The majority of the class types on a keyboard every day and uses two fingers when typing on a mobile phone. The prevalent use of the iPhone not only results in small variations in mobile device type but also affects the screen sizes since iPhones have similar sizes despite the students may have different phone models.
 
-The population of interest, by looking at the research question, can be broadly referred as "people who type fast on a keyboard". In our study, we restrict the study population to students in their senior years of undergraduate studies at a Canadian university. Yet our sample can barely represent this restricted study population. Coupled with the model inadequacies discussed above, the findings from the model cannot substantially contribute to answering the research question.
+The population of interest, by looking at the research question, can be broadly described as "people who type fast on a keyboard". In our study, we restrict the study population to students in their senior years of undergraduate studies at a Canadian university. Yet our sample can barely represent this restricted study population. Coupled with the model inadequacies discussed above, the findings from the model cannot substantially contribute to answering the research question.
 
 ## Limitation 3: Questionable Test Response
 
