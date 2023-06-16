@@ -292,6 +292,7 @@ From Figure 2 we can observe a positive trend between the typing speed on a keyb
 
 The above plots motivate the choice of methods in this analysis, to be elaborated in the **Methods** section.
 
+
 # Methods
 
 ## Study Design

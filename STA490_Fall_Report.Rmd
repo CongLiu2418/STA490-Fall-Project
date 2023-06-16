@@ -1,0 +1,631 @@
+---
+title: "An empirical analysis says yes: do people who type fast on the keyboard also type faster on a mobile device"
+author: "Cong Liu - 1006267200"
+date: "2022-12-05"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_knit$set(root.dir = "/Users/crystal-liu/Downloads/sta490")
+```
+
+```{r clear env and import libs, message=FALSE, warning=FALSE, include=FALSE}
+#getwd() # checking current wd
+rm(list = ls())
+library(tidyverse)
+library(dplyr)
+library(data.table)
+library(tidyselect)
+library(plyr)
+library(ggpubr)
+```
+
+```{r data cleaning steps, warning=FALSE, include=FALSE}
+# Loading in the raw data 
+typingdata.raw <- read.csv("typingdata.csv")
+
+# Checking missing values
+no_na <- na.omit(typingdata.raw)
+dim(typingdata.raw) == dim(no_na)
+
+# Checking duplicates
+
+no_dup <- matrix(FALSE, 
+                 nrow = nrow(typingdata.raw), 
+                 ncol = ncol(typingdata.raw)) # matrix of FALSE
+#duplicated(typingdata.raw) == no_dup 
+# if there is no duplicates in data, duplicated(.) is a matrix of False
+# then the statement returns matrix of TRUE
+
+# Overview of data
+str(typingdata.raw)
+
+### Rename columns 
+library(data.table)
+old_names <- names(typingdata.raw)
+new_names <- c("key_wpm_01",
+               "key_acc_01",
+               "key_wpm_02",
+               "key_acc_02",
+               "key_wpm_03",
+               "key_acc_03",
+               "mobile_wpm_01",
+               "mobile_acc_01",
+               "mobile_wpm_02",
+               "mobile_acc_02",
+               "mobile_wpm_03",
+               "mobile_acc_03",
+               "mobile_fingers",
+               "mobile_type",
+               "screen_diag_size",
+               "key_type",
+               "age",
+               "key_freq",
+               "gamer",
+               "musician",
+               "physical_limitation",
+               "english_fluency")
+
+to_clean <- setnames(typingdata.raw, old = old_names, new = new_names)
+# at the caveat at also renaming columns in the raw data
+# yet the "rawest" from can always retrieved by reading in the .csv file
+
+### Remove units from observations 
+
+# remove "WPM" from speed 
+to_clean <- to_clean %>% 
+  mutate_at(vars(contains("wpm")), ~str_remove(., "WPM"))
+
+# remove "%" from accuracy 
+to_clean <- to_clean %>% 
+  mutate_at(vars(contains("acc")), ~str_remove(., "%"))
+
+# remove "cm" and "centimeter" from screen size
+to_clean <- to_clean %>% 
+  mutate_at(vars(contains("screen")), ~str_remove(., "cm"))
+
+to_clean <- to_clean %>% 
+  mutate_at(vars(contains("screen")), ~str_remove(., "centimeters"))
+
+# find dimensionality entries in screen size
+screen_sizes <- tibble::tibble(index = 1:39,
+                               sizes = to_clean$screen_diag_size) 
+
+size_error <- screen_sizes %>%  # find the rows that cannot be converted to numeric
+     dplyr::mutate(row_num = row_number()) %>%
+     filter(is.na(as.numeric(sizes)))
+size_error
+
+# compute diagonal size using Pythagorean
+diag_13 = sqrt(14.67^2 + 7.15^2)
+diag_13
+
+diag_35 = sqrt((78.1/10)^2 + (160.8/10)^2) # convert mm to cm
+diag_35
+
+# impute diagonal lengths
+to_clean$screen_diag_size[13] <- diag_13
+to_clean$screen_diag_size[35] <- diag_35
+
+# handle the inches entry
+which.min(to_clean$screen_diag_size) # the minimum (entered in inches) is at index 14
+mobile_diagonal_inch <- as.numeric(to_clean$screen_diag_size[14])
+to_clean$screen_diag_size[14] <- mobile_diagonal_inch * 2.54
+
+### Change Data Types 
+cols_to_change <- c("key_wpm_01",
+               "key_acc_01",
+               "key_wpm_02",
+               "key_acc_02",
+               "key_wpm_03",
+               "key_acc_03",
+               "mobile_wpm_01",
+               "mobile_acc_01",
+               "mobile_wpm_02",
+               "mobile_acc_02",
+               "mobile_wpm_03",
+               "mobile_acc_03",
+               "screen_diag_size",
+               "age")
+index_to_change <- match(cols_to_change,
+                         names(to_clean))
+to_clean[ , index_to_change] <- apply(to_clean[ , index_to_change], 
+                                      2, 
+                                      function(x) as.numeric(x))
+str(to_clean) # the mentioned columns are converted to numeric
+dim(to_clean) == dim(na.omit(to_clean)) # no NAs introduced by conversion
+
+### Map Values 
+
+# for keyboard frequency
+old_key_freqs = c("Every day or almost every day", 
+                  "A few times per week",
+                  "A few times per month or less")
+to_clean$key_freq <- plyr::mapvalues(to_clean$key_freq, 
+                                     from = old_key_freqs,
+                                     to = c("Every day", "Weekly", "Monthly"))
+to_clean$key_freq 
+# current baseline is "Every day"
+levels(as.factor(to_clean$key_freq))[1] 
+
+# for keyboard type
+old_key_types = c("A laptop keyboard, with low-profile keys (so the keys don't go down much when you type)", "A mechanical keyboard, with raised keys (i.e. a keyboard that is not built in to a laptop, but that is either connected via a cable or bluetooth)")
+to_clean$key_type <- plyr::mapvalues(to_clean$key_type, 
+                                     from = old_key_types,
+                                     to = c("Low-profile", "Raised"))
+to_clean$key_type 
+# current baseline is "Low-profile"
+levels(as.factor(to_clean$key_type))[1] 
+
+# for english fluency
+old_fluency = c("Fully fluent in English", "Professional fluency in English", "Conversational fluency in English")
+to_clean$english_fluency <- plyr::mapvalues(to_clean$english_fluency, 
+                                     from = old_fluency,
+                                     to = c("Full", "Professional", "Conversational"))
+# current baseline is "Conversational"
+levels(as.factor(to_clean$english_fluency))[1]
+# relevel such that Full > Professional > Conversational
+to_clean$english_fluency <- factor(to_clean$english_fluency, 
+                                   levels = c("Conversational", "Professional", "Full"))
+levels(as.factor(to_clean$english_fluency))[2]
+levels(as.factor(to_clean$english_fluency))[3]
+
+### Tidy and model-ready format 
+
+# average across 3 trials
+to_clean <- to_clean %>% 
+  mutate(key_avg_wpm = floor((key_wpm_01 + key_wpm_02 + key_wpm_03) / 3), # take floor for wpm
+         key_avg_acc = (key_acc_01 + key_acc_02 + key_acc_03) / 3,
+         mobile_avg_wpm = floor((mobile_wpm_01 + mobile_wpm_02 + mobile_wpm_03) / 3),
+         mobile_avg_acc = (mobile_acc_01 + mobile_acc_02 + mobile_acc_03) / 3)
+# cwpm per trial
+
+# select relevant columns for model building
+typing_data <- to_clean %>% select(key_avg_wpm, # "x"
+                                   mobile_fingers,
+                                   mobile_type,
+                                   screen_diag_size,
+                                   key_type,
+                                   age,
+                                   key_freq,
+                                   gamer,
+                                   musician,
+                                   physical_limitation,
+                                   english_fluency, 
+                                   mobile_avg_wpm) #"y"
+str(typing_data)
+```
+
+# Abstract
+
+A news article reports that people can achieve similar typing speed on mobile phones as on computer keyboards. To confirm this finding, we measured typing speed and typing performance factors of students enrolled in STA490. Through multiple linear regression, we show that across individuals, the most significant predictors of typing speed on a mobile phone are keyboard typing speed ($p \approx 0.0004$) and mobile phone type ($p \approx 0.0066$). People who type fast on a keyboard **also** type faster on a mobile device. 
+
+\newpage
+
+# Introduction
+
+Due to the COVID-19 pandemic, remote learning has become a new norm. Mobile phones are a lot more portable and accessible than computers and laptops for instant and seamless conversations. When using telecommunication technologies, the efficiency of communication is likely to depend on how fast people can type. For students who need efficient communication in online learning, it is ideal that they can touch type on their mobile phones with the same proficiency as when typing on a computer keyboard. The findings presented in this [\textcolor{blue} {news article}](https://www.cnet.com/tech/mobile/people-can-now-type-on-phones-nearly-as-fast-as-on-computer-keyboards/) can highly encourage those who wonder how much of their keyboard typing performance can be transferred to typing on a mobile device: people can now type on their smartphones almost as fast as they can on their computer keyboards. 
+
+As statisticians, we want to collect data to formally investigate this research question: **Do people who type fast on a keyboard also type faster on their mobile phones?** Our analysis leverages data on typing speed and relevant characteristics collected from students enrolled in a fourth-year statistics course (STA490) at the University of Toronto. Using the individual-level data, we employ a multiple linear regression model to identify the correlation between computer keyboard typing speed and the speed at which people type on a mobile phone while controlling for the effect of other relevant covariates.
+
+The remainder of the report is organized as follows. The Data Summary introduces the data sample and its collection process. Methods describe considerations behind using multiple linear regression. The Results section reports the regression results followed by the Discussion section that discusses limitations and future considerations for this analysis. Finally, the Conclusion section concludes the findings and summarizes the implications of the analysis.
+
+
+# Data Summary
+
+All 39 students enrolled in STA490 tested their English typing speed using an [\textcolor{blue} {online platform}](https://10fastfingers.com/typing-test/english). Except for the sampling convenience, we also expect this student sample to represent other senior undergraduates in Canadian universities reasonably well. On both a keyboard and a mobile device, STA490 students tested their typing speeds three times. Later, the students reported their results from each trial in a survey form. The survey also asks for students’ self-assessments of factors that we believe are relevant to typing performance (e.g. students' keyboard usage frequency, whether the student has a physical injury at the time of tests).
+
+The online typing test has a time limit of 60 seconds. The test takers need to type out randomly generated words. For typing speed measurement purposes, each English word is standardized to be five characters or keystrokes long, including spaces and punctuation. The online typing test platform thus bases its Words Per Minute (**WPM**) calculation on the following conversion rule: **5 keystrokes equal 1 WPM**. The records of the test results entail (i) the typing speed (in *correct* WPM) and (ii) the accuracy (percentage of the correct keystrokes).
+
+For each typing device (computer keyboard and mobile phone), we average the results from the three test trials so that each individual contributes only one value to the analysis. The averaging is necessary for the study design and the answer to our research question. The three trials were designed for getting a more precise estimate of individuals' typing speed on the two types of devices. By averaging the repeated measurements, we hope to eliminate irrelevant idiosyncrasies (e.g. measurement errors). In addition, our research question wants to understand whether a positive correlation between keyboard typing speed and mobile phone typing speed exists **across individuals** rather than validating the existence of the association within each individual. Thus the average of individuals’ typing speed measurements is sufficient for this analysis. In total, we have 39 measurements of individuals' average typing speed on both a keyboard and a mobile phone, along with their self-report of other potential performance predictors available for analysis. Table A1 in the Appendix presents summary statistics of our STA490 data sample. 
+
+```{r Figure 1: scatterplot of keywpm vs mobilewpm}
+fig.1 <- typing_data %>% ggplot(aes(x=key_avg_wpm, y=mobile_avg_wpm, color = key_avg_wpm)) +
+  geom_point() +
+  labs(x = "Keyboard Typing Speed (WPM)",
+       y = "Mobile Device Typing Speed (WPM)",
+       colour = "Keyboard Typing Speed (WPM)") +
+  scale_colour_viridis_c() +
+  theme_minimal()
+
+annotate_figure(fig.1, 
+                top = text_grob("Scatterplot between keyboard and mobile typing speed", 
+                                color = "black", face = "bold", size = 12),
+                fig.lab = "Figure 1", fig.lab.face = "bold")
+```
+
+Figure 1 along with other plots of potential predictors for mobile typing performance (Figure A2 in the Appendix) motivates the method chosen in this analysis, which is to be elaborated in the Methods section.
+
+
+# Methods
+
+We choose to use multiple linear regression (**MLR**) to model the effect of keyboard typing speed and other relevant covariates on how fast people type on a mobile phone.
+
+From Figure 1 above, we can observe a positive linear trend between students’ typing speed on a keyboard and typing speed on a mobile phone, after averaging measurements across the three trials. This motivates the use of a linear model for the relationship between keyboard typing speed and mobile phone typing speed. Observations from Figure A2 (in the Appendix) show that other covariates are also linearly associated with mobile phone typing speed. For example, the diagonal length of the mobile screen has a negative linear relationship with people's typing speed on a mobile phone. In addition, people with higher English proficiency tend to type faster on a mobile phone and the increment in typing speed is linear. 
+
+Incorporating graphical insights into our consideration, the most appropriate model for the data is multiple linear regression. A multiple linear regression model allows the addition of extra covariates to the linear model. Results from an MLR can help us determine whether keyboard typing speed is a significant predictor of how fast an individual can type on a mobile phone among the features collected in the student-level data, controlling for other covariates.
+
+Since the focus of the research question is the relationship between keyboard typing speed and typing speed on a mobile device, we need to decide whether an MLR is indeed necessary. The model competing with the MLR is a simple linear regression (**SLR**) only using the keyboard typing speed to model the mobile device typing speed. To assess and compare the candidate models’ goodness of fit to our data, we use the likelihood ratio test (**LRT**). At the predetermined significance level of 0.05, LRT can tell us whether at least one additional covariate is redundant in the richer MLR model. If we get a p-value smaller than 0.05 from the LRT, we can conclude that adding some of the variables is statistically significant.
+
+Like all models, the validity of an MLR model is under the premise of satisfying assumptions. To evaluate whether our fitted model violates any of the assumptions, we look at plots of the model residuals. If our MLR model satisfies the assumptions, when plotting the residuals versus the fitted values, we would see a random scatter of the data points that is symmetric around zero. The quantile of the standardized residuals will also agree with the theoretical Normal quantiles - the quantile points follow closely to the diagonal line. The MLR assumptions and their evaluation are fully described in Appendix.
+
+# Results
+
+```{r models and lrt, include=FALSE}
+# mlr model
+model.mlr <- lm(mobile_avg_wpm ~ key_avg_wpm + as.factor(mobile_type) + screen_diag_size 
+                   + as.factor(key_type) + age + as.factor(gamer) 
+                   + as.factor(english_fluency),
+                     data = typing_data)
+
+# keyOnly model-slr for keyboard versus mobile typing speed
+model.slr <- lm(mobile_avg_wpm ~ key_avg_wpm, data = typing_data)
+
+
+# LRT of models
+lrt <- lmtest::lrtest(model.mlr, model.slr)
+lrt.pval <- lrt$`Pr(>Chisq)`[2]
+
+lrt.pval
+```
+
+After conducting LRT, the test statistic we get is $\chi^2_7 \approx 17.236$, which is associated with a p-value less than 0.05 ($p \approx 0.01541$). Our richer MLR model fits better to typing test data sampled from the STA490 students, compared with the SLR. The diagnostics plots (Figure A4-A6 in Appendix) show that our MLR model does not have a major violation of assumptions. Thus we can proceed with interpreting the results from the MLR model.
+
+```{r Table 1: table of significant coefficients, echo=FALSE}
+reg_dict <- tibble(term = c("Keyboard typing speed (WPM)", 
+                            "Mobile device type: iPhone"),
+                   estimate = c("0.3387", "10.5396"),
+                   se = c("0.0843", "3.6083"),
+                   tstat = c("4.0186", "2.9209"),
+                   confint = c("(0.1666, 0.5109)", "(3.1704, 17.9087)"))
+
+knitr::kable(reg_dict,
+             col.names = c("Variable", 
+                           "Estimate", 
+                           "Std. Error", 
+                           "t-statistic", 
+                           "95% Confidience interval"),
+             caption = "Significant Result From Regression on Mobile Phone Typing Speed")
+```
+
+```{r Figure 2: results viz}
+fig.2 <- typing_data %>% ggplot(aes(x=key_avg_wpm, y=mobile_avg_wpm, color=as.factor(mobile_type))) + 
+  geom_point() +
+  geom_smooth(mapping = aes(x=key_avg_wpm, y=mobile_avg_wpm),
+              method = "lm",
+              formula = y~x, se=F) +
+  labs(x = "Keyboard Typing Speed (WPM)",
+       y = "Mobile Device Typing Speed (WPM)",
+       subtitle = "iPhone users are going to win the touch typing race?",
+       colour = "Mobile Device Type") +
+  scale_colour_viridis_d() +
+  theme_minimal() 
+
+annotate_figure(fig.2, 
+                top = text_grob("Figure 2: Keyboard versus Mobile Typing Speed across Mobile Device Types", 
+                                color = "black", face = "bold", size = 12),
+                fig.lab.face = "bold")
+#fig.lab = "Figure 2", 
+#fig.2
+```
+
+We first highlight the predictors that have a statistically significant effect on mobile phone typing speed. In terms of statistical significance, the best predictor of STA490 students’ mobile typing performance is the average keyboard typing speed from the three test trials, which has the smallest p-value ($p \approx 0.0004$) among all model variables. The 95% confidence interval of the coefficient estimate for the keyboard typing speed is (0.1666, 0.5109). Connecting back to our research question, the statistical significance supports us to answer it with a “yes”: those who type fast on a keyboard **also** type faster on their mobile phones. An STA490 student who types 10 words per minute faster on a keyboard is estimated to type at least `r floor(10*0.3387)` WPM faster on a mobile phone, holding all other model covariates constant. Other than an individual's typing speed on a keyboard, the type of mobile phone being used also has a statistically significant impact on how fast one can type on a mobile phone (95% CI 3.1704 to 17.9087). The MLR model estimates that, when controlling for all other predictors in the model, iPhone users can type at least `r floor(10.0209)` WPM faster than Android users. iPhone users have a significant advantage in touch typing. When all other model variables are held constant, the improvement in phone typing speed by using an iPhone is roughly equivalent to a speed increase brought by a person typing 33 WPM faster on the keyboard.
+
+```{r Table 2: table comparing model and plots, echo=FALSE}
+reg_dict2 <- tibble(term = c("Age",
+                          "Gamer: Yes",
+                          "English fluency: Professional",
+                          "English fluency: Full",
+                          "Keyboard type: Raised",
+                          "Mobile device screen size (cm)"),
+                   estimate = c("-1.6423", "1.1650", "1.4491", "2.8090", "4.9906", "0.9399"),
+                   est.dir = c("Negative", "Positive", "Positive", "Positive", "Positive", "Positive"),
+                   graph.dir = c("Negative", "Positive", "Positive", "Positive", "Positive", "Negative"))
+
+knitr::kable(reg_dict2,
+             col.names = c("Variable", 
+                           "Estimate", 
+                           "Coefficient direction", 
+                           "Graph direction"),
+             caption = "Comparing Direction of Regression Results")
+```
+
+Based on our MLR model, none of the other covariates have a statistically significant effect on mobile phone typing speed. Yet it is reassuring to see that most of the coefficient estimates have the same direction as the trend seen from graphical exploration (Figure A2 in Appendix). English fluency level is indeed positively correlated with how fast a person can type on a mobile phone. Compared with an individual with conversational fluency in English, someone who is professionally fluent can type around 1 to 2 WPM faster on a mobile phone if all other factors are held constant. The improvement in phone typing speed doubles for those who are fully fluent in English. Controlling for all other model variables, people with full fluency in English are estimated to type 2 to 3 WPM faster on their phones. Being a gamer also increases peoples’ phone typing speed, while aging slows people down when typing on a phone unsurprisingly.
+
+Yet there is one unexpected estimate. The MLR model yields a positive coefficient estimate for the relationship between mobile phone screen size and typing speed on a mobile phone, while graphically we observe a negative trend between screen size and phone typing speed (Figure A2 in Appendix). This leads to concerns about the potential limitations of the MLR model, which are discussed in more depth in the Discussion section below.
+
+# Discussion
+
+## Limitation
+The MLR model estimates a positive correlation between the screen size of the phone and typing speed on mobile phones, contrary to the negative trend shown in Figure A2 (Appendix). The lack of variation in data shown in Table A1 in the Appendix may explain the inconsistency between the model estimate and the graphical trend. The popularity of the iPhone in STA490 class not only shrinks variations in mobile phone type but also affects the variation of screen sizes. iPhones have similar sizes despite the fact that students may have different iPhone models. Less variation in the screen sizes makes it difficult for the model to identify the true relationship between screen size and the speed at which people type on their phones.
+
+There is evidence that interactions between typing performance predictors and keyboard typing speed should have been included in our MLR model (Figure A3 in Appendix). For example, the slopes of the trend line between keyboard typing speed and phone typing speed are notably different for typing on a mechanical (raised) keyboard versus a laptop (low-profile) keyboard. The positive association between using a raised keyboard and phone typing speed could be due to a correlation between keyboard type and keyboard typing speed rather than the type of keyboard directly affecting how fast a person types on a phone. Yet in the final model, we still exclude the interaction terms since our data is likely to be insufficient to justify the interaction effects, and there is a threat of model overfitting if we fit additional variables in the model. 
+
+## Future Direction
+As discussed, an inadequate model results from insufficient data. One potential solution to facilitate our analysis is to create “bootstrapped” samples from our STA490 data. That is, we can have a bigger dataset consisting of new samples from our small data at hand with replacement. Bootstrapping provides us with a larger sample to train our model without distorting the original sample. By building models on the bootstrapped data, we have a better chance of capturing the relationship between collected variables and typing speed on the phone.
+
+More ideally, we can collect more data using an improved study design. The population of interest for the research question can be broadly described as "people who type fast on a keyboard". In our investigation, we restrict the study population to fourth-year undergraduate students at a Canadian university. Yet it is arguable whether our convenience sample from the STA490 class at the University of Toronto can represent this restricted study population. A better sample would be, for example, 100 fourth-year students at UofT from different programs. Instead of using the same online test platform, we can test the typing speed using randomly generated article excerpts instead. Usually, we type logically coherent sentences rather than randomly generated words. The coherence allows us to anticipate the words coming next and hence we are likely to be able to type at a higher speed. Typing randomly generated words does not properly simulate real-world typing for the test takers. Students’ test results from typing the excerpts can better reflect their actual typing performance. It would be beneficial for the analysis to fix the time lapse between each typing test trial and to increase the number of trials so that the repeated measurements can help capture more information on people’s typing performance.
+
+# Conclusion
+
+To conclude, our analysis says "Yes" to the research question "do people who type fast on a keyboard also type faster on their mobile phones?". The analysis focuses on typing test results and information relevant to typing performance collected from STA490 students. A multiple linear regression model is fit to the data to investigate the relationship between students' keyboard typing speed and mobile phone typing speed. From the model, we find that the positive correlation between keyboard typing speed and mobile phone typing speed is statistically significant. Controlling for other model variables, someone who types 10 WPM faster on a keyboard is estimated to type at least `r floor(10*0.3387)` WPM faster on a mobile phone on average. The MLR also identifies the mobile phone type as the other significant predictor. On average, people who use an iPhone can type at least `r floor(10.0209)` WPM faster than Android users when all other model variables are held constant.
+
+\newpage
+
+# Appendix
+
+## Summary Statistics
+
+**Table A1**: Summary Statistics of the STA490 Sample
+
+```{r Table A1: Summary statistics, message=FALSE, warning=FALSE}
+library(vtable)
+definition = c("Averaged keyboard typing speed (WPM)",
+               "Mobile typing posture in tests",
+               "Mobile device type used in tests",
+               "Screen size of mobile device used in tests (cm)",
+               "Keyboard type used in tests ",
+               "Age at the time of tests (years)",
+               "Keyboard usage frequency at the time of tests",
+               "Gamer at the time of tests",
+               "Plays a keyboard instrument at the time of tests",
+               "Physical limitation related to typing at the time of tests",
+               "English fluency level at the time of tests",
+               "Averaged mobile device typing speed (WPM)")
+summary_df <- st(typing_data, summ=c('notNA(x)', 'mean(x)','sd(x)','min(x)','max(x)'),
+                 summ.names = c('N','Mean','Std. Dev','Min','Max'),
+                 out = 'return',
+                 labels = definition)
+summary_df %>% knitr::kable()
+```
+
+## Relevant Visualizations
+
+```{r Figure A1: Histogram of mobile_avg_wpm}
+hist(typing_data$mobile_avg_wpm, 
+              ylim = c(0, 0.04),
+              probability = TRUE,
+              main = paste("Figure A1: Histogram of averaged mobile typing speed \n versus Normal"),
+              xlab = "Averaged mobile typing speed (WPM)")
+
+s <- seq(from = 20, to = 80, by = 1/1000)
+lines(s, dnorm(s, mean = mean(typing_data$mobile_avg_wpm), 
+               sd = sd(typing_data$mobile_avg_wpm)), 
+               col="red") # Compare with Normal
+```
+
+```{r Figure A2: Plots of potential predictors for mobile typing performance, warning=FALSE}
+# keyboard_avg_wpm
+key_wpm_plot <- typing_data %>% ggplot(aes(x=key_avg_wpm, y=mobile_avg_wpm)) +
+  geom_point(show.legend = FALSE) + 
+  geom_smooth(method = "lm", formula = y~x, se=F) +
+  labs(x = "Keyboard Typing Speed (WPM)",
+       y = " ") +
+  scale_colour_viridis_c() +
+  theme_minimal()
+
+# mobile_type
+mobile_type_plot <- typing_data %>% ggplot(aes(x=mobile_type, y=mobile_avg_wpm, color=as.factor(mobile_type))) + 
+  geom_point(show.legend = FALSE) + 
+  labs(x = "Mobile Type", 
+       y = " ") +
+  scale_colour_viridis_d() +
+  theme_minimal()
+#mobile_type_plot
+
+# screen_diag
+screen_diag_plot <- typing_data %>% 
+  ggplot(aes(x=screen_diag_size, y=mobile_avg_wpm)) +
+  geom_point(show.legend = FALSE) +
+  geom_smooth(method = "lm", formula = y~x, se=F) + 
+  labs(x = "Mobile Device Screen Size (cm)", 
+       y = " ") +
+  scale_colour_viridis_c() +
+  theme_minimal() 
+#screen_diag_plot 
+
+# key_type
+key_type_plot <- typing_data %>% ggplot(aes(x=key_type, y=mobile_avg_wpm, color=as.factor(key_type))) + 
+  geom_point(show.legend = FALSE) +
+  labs(x = "Keyboard Type",
+       y = " ") +
+  scale_colour_viridis_d() +
+  theme_minimal()
+#key_type_plot
+
+# age
+age_plot <- typing_data %>% 
+  ggplot(aes(x=age, y=mobile_avg_wpm)) +
+  geom_point(show.legend = FALSE) +
+  geom_smooth(method = "lm", formula = y~x, se=F) + 
+  labs(x = "Age (years)", 
+       y = " ") +
+  scale_colour_viridis_c() +
+  theme_minimal() 
+#age_plot
+
+# gamer
+gamer_plot <- typing_data %>% ggplot(aes(x=as.factor(gamer), y=mobile_avg_wpm, color=as.factor(gamer))) + 
+  geom_point(show.legend = FALSE) + 
+  labs(x = "Gamer", 
+       y = " ") +
+  scale_colour_viridis_d() +
+  theme_minimal()
+#gamer_plot
+
+# english_fluency
+english_plot <- typing_data %>% ggplot(aes(x=as.factor(english_fluency), y=mobile_avg_wpm, color=as.factor(english_fluency))) + 
+  geom_boxplot(show.legend = FALSE) + 
+  scale_colour_viridis_d() +
+  labs(x = "English Fluency", 
+       y = " ") +
+  theme_minimal()
+#english_plot
+
+# Figure A2
+fig.A2 <- ggarrange(key_wpm_plot, mobile_type_plot, screen_diag_plot, key_type_plot, age_plot, gamer_plot, english_plot,
+          ncol = 2, nrow = 4)
+annotate_figure(fig.A2, 
+                top = text_grob("Plots of potential predictors for mobile typing performance", 
+                                color = "black", face = "bold", size = 12),
+                left = text_grob("Mobile Device Typing Speed (WPM)", color = "black", rot = 90),
+                fig.lab = "Figure A2", fig.lab.face = "bold")
+```
+
+```{r Figure A3: Plots of potential interaction terms}
+keytype_inter <- typing_data %>% ggplot(aes(x=key_avg_wpm, y=mobile_avg_wpm, color=as.factor(key_type))) + 
+  geom_point() +
+  geom_smooth(mapping = aes(x=key_avg_wpm, y=mobile_avg_wpm),
+              method = "lm",
+              formula = y~x, se=F) + 
+  labs(x = " ",
+       y = " ",
+       title = "Keyboard Types",
+       colour = "Keyboard Type") +
+  scale_colour_viridis_d() +
+  theme_minimal()  
+
+age_inter <- typing_data %>% ggplot(aes(x=key_avg_wpm, y=mobile_avg_wpm, color=as.factor(age))) + 
+  geom_point() +
+  geom_smooth(mapping = aes(x=key_avg_wpm, y=mobile_avg_wpm),
+              method = "lm",
+              formula = y~x,
+              se = FALSE) +
+  labs(x = " ",
+       y = " ",
+       title = "Ages",
+       colour = "Age") +
+  scale_colour_viridis_d() +
+  theme_minimal()
+
+music_inter <- typing_data %>% ggplot(aes(x=key_avg_wpm, y=mobile_avg_wpm, color=as.factor(musician))) + 
+  geom_point() +
+  geom_smooth(mapping = aes(x=key_avg_wpm, y=mobile_avg_wpm),
+              method = "lm",
+              formula = y~x, se=F) + 
+  labs(x = " ",
+       y = " ",
+       title = "(Non-)musicians",
+       colour = "Musician") +
+  scale_colour_viridis_d() +
+  theme_minimal()
+
+english_inter <- typing_data %>% ggplot(aes(x=key_avg_wpm, y=mobile_avg_wpm, color=as.factor(english_fluency))) + 
+  geom_point() +
+  geom_smooth(mapping = aes(x=key_avg_wpm, y=mobile_avg_wpm),
+              method = "lm",
+              formula = y~x, se=F) + 
+  labs(x = " ",
+       y = " ",
+       title = "English Fluency Levels",
+       colour = "English Fluency") +
+  scale_colour_viridis_d() +
+  theme_minimal()
+
+# Figure A3
+fig.A3 <- ggarrange(keytype_inter, age_inter, music_inter, english_inter,
+          ncol = 2, nrow = 2)
+annotate_figure(fig.A3, 
+                top = text_grob("Plots of potential interaction terms", 
+                                color = "black", face = "bold", size = 12),
+                left = text_grob("Mobile Device Typing Speed (WPM)", color = "black", rot = 90),
+                bottom = text_grob("Keyboard Typing Speed (WPM)", color = "black"),
+                fig.lab = "Figure A3", fig.lab.face = "bold")
+```
+
+## Model Assumptions and Diagnostics
+
+We can be assured that the multiple linear regression model gives us reliable coefficient estimates if the data satisfies, or at least does not have a major violation of, the assumptions listed below.
+
+### 1. Independence of observations
+
+Other than enrolling in the same course, there is no known inter-correlation among the individuals relevant to typing speed (e.g. the course enrollment is not based on any evaluation of typing proficiency). Thus we do have **39 independent observations**.
+
+### 2. A linear relationship
+
+The scatterplot between keyboard typing speed and mobile typing speed shows an approximately linear trend. From Figure A2, there is no sufficient evidence suggesting that other variables have a non-linear effect on the mobile device typing speed.
+
+### 3. No perfect correlation between model predictors
+
+There is some concern since some factors (e.g. students' age, physical limitation and English fluency) affect the typing speed on both devices simultaneously.
+
+### 4. Error terms have a constant variance.
+
+### 5. Error terms follow a Normal distribution.
+
+The multiple linear regression also assumes that error terms follow a Normal distribution and have a constant variance. Error terms with a constant variance ensure the stability of our coefficient estimates. Others can be convinced by the model results if the variability of the coefficient estimates is well-controlled. The normal distribution is a nice-to-have. Mathematically, normality gives us convenient properties when we try to dig deeper into the coefficient estimates.
+
+From Figure A1, the approximately close-to-normal distribution of the mobile typing speed give us some confidence that our data do not have a major violation of the assumptions. In addition, three residual plots are closely examined to check whether error terms follow a Normal distribution and have a constant variance.
+
+1. Plot of residuals versus fitted values
+2. Plot of residuals versus leverage
+3. Normal Quantile-Quantile plot of the standardized model residuals’ quantile against the theoretical
+Normal quantiles
+
+If the model is suitable for the data, we can see:
+
+- From Plot 1
+  – Majority of the values fall in the rough range of [-2, 2]
+  – Random scatter of the values, no observable pattern/trend
+  – Rough symmetry around 0
+
+- Plot 2
+  – Falls inside the boundary defined by the Cook’s distance, a measurement of how influential an observation is to the fitted model
+
+- Plot 3
+  – Quantiles of the standardized residuals agree well with the theoretical Normal quantiles.
+  – The quantile points follow closely to the diagonal
+
+```{r Figure A4: fitted-residual plot}
+plot(model.mlr, which = 1,
+     main = "Figure A4: Residuals vs Fitted Value",
+     caption = NA,
+     sub.caption = NA)
+```
+
+**Figure A4**: By visual inspection,
+
+- no systematic pattern in the residuals, linearity of the relationship
+- no cluster of residuals, independence of errors
+- no fanning pattern, constant variance
+
+```{r Figure A5: residual-leverage plot}
+plot(model.mlr, which = 5,
+     main = "Figure A5: Residuals versus Leverage",
+     caption = NA,
+     sub.caption = NA)
+```
+
+**Figure A5**: Observation #17 lies closest to the border of Cook’s distance, but it doesn’t fall outside of the dashed line. This means there are not any influential points in our regression model.
+
+```{r Figure A6: normal q-q plot}
+plot(model.mlr, which = 2,
+     main = "Figure A6: Normal Quantile-Quantile plot",
+     caption = NA,
+     sub.caption = NA)
+```
+
+**Figure A6**: Majority of the standardized residuals stay close enough with the theoretical normal quantiles.
+
+## Full Regression Results
+
+**Table A2**: Regression Analysis of Mobile Phone Typing Speed on Selected Predictors
+```{r Table A2: table of coefficients, echo=FALSE}
+broom::tidy(model.mlr) %>% 
+  mutate(term = c("Intercept", 
+                  "Keyboard typing speed (WPM)", 
+                  "Mobile device type: iPhone",
+                  "Mobile device screen size (cm)",
+                  "Keyboard type: Raised",
+                  "Age",
+                  "Gamer: Yes",
+                  "English fluency: Professional",
+                  "English fluency: Full")) %>%
+  knitr::kable(digits = 4,
+               col.names = c("Term", 
+                             "Estimate", 
+                             "Std. Error", 
+                             "t-statistic", 
+                             "p-value"))
+```
